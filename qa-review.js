@@ -201,6 +201,7 @@
   const contentRect = (el) => {
     const r = el.getBoundingClientRect();
     if (BOXY[el.tagName.toUpperCase()] || el.getAttribute('role') === 'button' || !el.firstChild) return r;
+    if (String(attempt(() => styleOf(el).display, '')).startsWith('inline')) return r;
     const range = attempt(() => {
       const x = el.ownerDocument.createRange();
       x.selectNodeContents(el);
@@ -1371,10 +1372,10 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
           const midY = box.top + (box.bottom - box.top - bh) / 2;
           const spots = [
             { left: box.left - 2, top: box.top - bh / 2 - 1 },
-            { left: box.left, top: box.top - bh - 4 },
-            { left: box.left - 2, top: box.bottom - bh / 2 + 1 },
-            { left: box.left - bw - 6, top: midY },
             { left: box.right + 6, top: midY },
+            { left: box.left, top: box.top - bh - 4 },
+            { left: box.left - bw - 6, top: midY },
+            { left: box.left - 2, top: box.bottom - bh / 2 + 1 },
             { left: box.left, top: box.bottom + 4 },
             { left: box.right - bw + 2, top: box.top - bh / 2 - 1 },
           ].map((s) => ({ left: s.left, top: s.top, right: s.left + bw, bottom: s.top + bh }));
@@ -1388,9 +1389,10 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
             badges.forEach((other) => {
               if (hit(s, other)) total += 30;
             });
-            const y = s.top + bh / 2 - off.top;
-            [s.left + 5, (s.left + s.right) / 2, s.right - 5].forEach((x) => {
-              if (textAt(doc, x - off.left, y)) total += 10;
+            [s.top + 4, s.top + bh / 2, s.bottom - 4].forEach((py) => {
+              [s.left + 5, (s.left + s.right) / 2, s.right - 5].forEach((px) => {
+                if (textAt(doc, px - off.left, py - off.top)) total += 4;
+              });
             });
             return total;
           };
