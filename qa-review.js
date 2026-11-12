@@ -96,7 +96,8 @@
   const shortUrl = (url) => attempt(() => {
     const u = new URL(url, location.href);
     const rest = u.pathname + u.search + u.hash;
-    return u.origin === location.origin ? rest : u.host + (rest === '/' ? '' : rest);
+    if (rest === '/' || rest === '') return u.host;
+    return u.origin === location.origin ? rest : u.host + rest;
   }, String(url || ''));
   const link = (url, mono) => `<a class="ln${mono ? ' mono' : ''}" href="${esc(url)}" data-href="${esc(url)}" title="${esc(url)}">${esc(shortUrl(url))}</a>`;
   const URLS = /(https?:\/\/[^\s<>"'`]+[^\s<>"'`.,;:!?)\]])/g;
@@ -195,6 +196,34 @@
         .filter((el) => squash([el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('title'), el.getAttribute('alt')].join(' ')).includes(want) && isShown(el));
     }
     return { el: shown[nth] || null, matches: shown.length };
+  };
+  const BOXY = { INPUT: 1, TEXTAREA: 1, SELECT: 1, BUTTON: 1, IMG: 1, SVG: 1, VIDEO: 1, CANVAS: 1, IFRAME: 1, SUMMARY: 1, PROGRESS: 1 };
+  const contentRect = (el) => {
+    const r = el.getBoundingClientRect();
+    if (BOXY[el.tagName.toUpperCase()] || el.getAttribute('role') === 'button' || !el.firstChild) return r;
+    const range = attempt(() => {
+      const x = el.ownerDocument.createRange();
+      x.selectNodeContents(el);
+      return x;
+    }, null);
+    const c = range ? range.getBoundingClientRect() : null;
+    if (!c || c.width < 2 || c.height < 2 || (c.width > r.width - 10 && c.height > r.height - 10)) return r;
+    const inner = intersect(c, r);
+    return inner ? Object.assign(inner, { width: inner.right - inner.left, height: inner.bottom - inner.top }) : r;
+  };
+  const textAt = (doc, x, y) => {
+    let node = null;
+    if (doc.caretRangeFromPoint) {
+      const range = attempt(() => doc.caretRangeFromPoint(x, y), null);
+      node = range && range.startContainer;
+    } else if (doc.caretPositionFromPoint) {
+      const pos = attempt(() => doc.caretPositionFromPoint(x, y), null);
+      node = pos && pos.offsetNode;
+    }
+    if (!node || node.nodeType !== 3 || !node.textContent.trim()) return false;
+    const r = doc.createRange();
+    r.selectNodeContents(node);
+    return Array.from(r.getClientRects()).some((c) => x >= c.left && x <= c.right && y >= c.top && y <= c.bottom);
   };
   const selectorFor = (el) => {
     const doc = el.ownerDocument;
@@ -409,6 +438,12 @@ svg{display:block}
 .tab.on{background:#111827;color:#fff}
 .tab i{font-style:normal;margin-left:4px;opacity:.7}
 .body{flex:1;min-height:0;overflow:auto;padding:12px 14px 14px;overscroll-behavior:contain}
+.body.more,.nb.more{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent)}
+details.prep{margin:0 0 10px;background:#f9fafb;border:1px solid #eef0f4;border-radius:10px;padding:7px 10px}
+details.prep summary{cursor:pointer;font-size:12.5px;color:#4b5563;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+details.prep summary b{color:#111827;margin-right:6px}
+details.prep[open] summary{white-space:normal}
+details.prep ul{margin-top:6px}
 .ft{flex:none;display:flex;align-items:center;gap:8px;padding:8px 10px 8px 14px;border-top:1px solid #eef0f4;background:#fff}
 .ft .sum{flex:1;min-width:0;font-size:12.5px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .top.fold{max-height:none}
@@ -455,7 +490,7 @@ details.sec summary{cursor:pointer}
 .dot.needs::after{content:"!";font-size:11px;font-weight:900;line-height:1}
 .empty{color:#6b7280;font-size:13px;margin:10px 2px}
 .nh{flex:none;display:flex;align-items:center;gap:7px;padding:9px 8px 9px 14px;border-bottom:1px solid #eef0f4;cursor:pointer;user-select:none}
-.nh .no{font-size:12.5px;font-weight:800;color:#dc2626;white-space:nowrap}
+.nh .no{font-size:12.5px;font-weight:800;color:#111827;white-space:nowrap}
 .nh .left{font-size:12px;color:#6b7280;white-space:nowrap}
 .nh .nt{display:none;flex:1;min-width:0;font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nh .sp{flex:1}
@@ -471,7 +506,8 @@ details.sec summary{cursor:pointer}
 .nav.fold .nb{display:none}
 .it{margin:0 0 5px;font-size:15px;font-weight:800;line-height:1.42}
 .meta{display:flex;flex-wrap:wrap;align-items:center;gap:3px 8px;font-size:12.5px;color:#6b7280;margin:0 0 9px}
-.meta .tiny{display:inline-flex;align-items:center;gap:3px;font-size:12px;font-weight:800;color:#dc2626}
+.meta .tiny{display:inline-flex;align-items:center;gap:3px;font-size:12px;font-weight:700;color:#6b7280}
+.meta .tiny:hover{color:#111827}
 .meta .tiny svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .sit{font-size:12.5px;color:#4b5563;margin:-3px 0 10px;line-height:1.55}
 .legend{display:flex;gap:12px;font-size:12px;color:#6b7280;margin:0 0 6px}
@@ -751,6 +787,13 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         }
         if (e.key === 'Escape') this.key(e);
       });
+      this.ui.body.addEventListener('scroll', () => this.fade(this.ui.body), { passive: true });
+      this.ui.nb.addEventListener('scroll', () => this.fade(this.ui.nb), { passive: true });
+      this.ui.root.addEventListener('toggle', (e) => {
+        if (e.target.classList && e.target.classList.contains('prep')) this.prepOpen = e.target.open;
+        this.fade(this.ui.body);
+        this.fade(this.ui.nb);
+      }, true);
       this.ui.pick.addEventListener('mousemove', (e) => this.pickMove(e));
       this.ui.pick.addEventListener('click', (e) => this.pickClick(e));
     }
@@ -890,7 +933,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         id: this.spec.id,
         item: it ? it.id : null,
         page: this.href(),
-        marks: this.targets.map((t) => ({ kind: t.kind, step: t.step || null, label: t.label, found: Boolean(t.el), matches: t.matches })),
+        marks: this.targets.map((t) => ({ kind: t.kind, step: t.step || null, label: t.label, found: Boolean(t.el), visible: Boolean(t.el && t.visible), matches: t.matches })),
       };
     }
 
@@ -983,6 +1026,13 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       const keep = this.ui.body.scrollTop;
       this.ui.body.innerHTML = tab === 'actions' ? this.actionsHtml() : tab === 'scenario' ? this.scenarioHtml() : this.originalHtml();
       this.ui.body.scrollTop = keep;
+      const curRow = tab === 'scenario' && this.ui.body.querySelector('.row.cur');
+      if (curRow) {
+        const b = this.ui.body.getBoundingClientRect();
+        const r = curRow.getBoundingClientRect();
+        if (b.height && (r.top < b.top || r.bottom > b.bottom)) this.ui.body.scrollTop += r.top - b.top - (b.height - r.height) / 2;
+      }
+      this.fade(this.ui.body);
       const comments = this.spec.items.reduce((n, it) => n + freshComments(this.entry(it.id)).length, 0);
       this.ui.sum.textContent = `검수완료 ${c.done} / ${c.all}`;
       const exportBtn = this.ui.top.querySelector('.ft [data-act="export"]');
@@ -1025,7 +1075,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       const s = this.spec;
       const c = this.counts();
       const f = this.state.filter;
-      const prep = s.prep.length ? `<section class="sec"><h5>준비</h5><ul>${s.prep.map((x) => `<li>${inline(x)}</li>`).join('')}</ul></section>` : '';
+      const prep = s.prep.length ? `<details class="prep"${this.prepOpen ? ' open' : ''}><summary><b>준비</b>${esc(String(s.prep[0]).replace(/[`*]/g, ''))}</summary><ul>${s.prep.map((x) => `<li>${inline(x)}</li>`).join('')}</ul></details>` : '';
       const filters = `<div class="filters" role="tablist">${FILTERS.map(([key, label]) => `<button class="fc f-${key}${key === f ? ' on' : ''}" type="button" data-act="filter" data-f="${key}">${label}<span>${c[key]}</span></button>`).join('')}</div>`;
       const rows = s.items.filter((it) => matchFilter(this.statusOf(it.id), f));
       const empty = { left: '남은 항목이 없어요. 모두 검수했어요.', needs: '추가 검토로 남긴 항목이 없어요.', done: '아직 검수완료한 항목이 없어요.', all: '검수 항목이 없어요.' }[f];
@@ -1086,7 +1136,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         : '';
       const situation = it.situation ? `<p class="sit">${inline(it.situation)}</p>` : '';
       const anyMark = it.steps.some((step) => step.marks.length) && sameSite;
-      const legend = anyMark ? '<div class="legend"><span><i class="on"></i>화면에 빨간 표시 있음</span><span><i></i>앞 단계를 하면 나타남</span></div>' : '';
+      const legend = anyMark ? '<div class="legend"><span><i class="on"></i>화면에 빨간 표시 있음</span><span><i></i>지금 화면에 없음</span></div>' : '';
       const steps = it.steps.length ? `${legend}<ol class="steps">${it.steps.map((step, k) => {
         const marked = step.marks.length > 0 && sameSite;
         return `<li class="st" data-step="${k + 1}" data-act="step"><span class="n${marked ? '' : ' nomark'}">${k + 1}</span><div class="tx">${inline(step.text)}`
@@ -1105,6 +1155,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         + `${nm ? `<div class="me">${esc(nm)}님 이름으로 남겨요<button type="button" data-act="rename">바꾸기</button></div>` : ''}</div></div>`;
       this.ui.nb.innerHTML = `${done}<h3 class="it">${inline(it.title)}</h3>${meta}${cross}${situation}${steps}${ai}${composer}`;
       this.ui.nb.scrollTop = keep;
+      this.fade(this.ui.nb);
       this.ui.prev.disabled = !this.neighbor(-1);
       this.ui.next.disabled = !this.neighbor(1);
       this.ui.done.disabled = false;
@@ -1218,8 +1269,30 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         const step = Number(li.dataset.step);
         const mine = this.targets.filter((t) => t.kind === 'step' && t.step === step);
         if (!mine.length) return;
-        li.classList.toggle('on', mine.some((t) => t.el));
+        li.classList.toggle('on', mine.some((t) => t.el && t.visible));
       });
+    }
+
+    fade(el) {
+      el.classList.toggle('more', el.scrollTop + el.clientHeight < el.scrollHeight - 2);
+    }
+
+    covered(el, rect) {
+      const doc = el.ownerDocument;
+      const points = [[0.5, 0.5], [0.25, 0.3], [0.75, 0.3], [0.25, 0.72], [0.75, 0.72]];
+      let tested = 0;
+      for (let i = 0; i < points.length; i += 1) {
+        const x = rect.left + (rect.right - rect.left) * points[i][0];
+        const y = rect.top + (rect.bottom - rect.top) * points[i][1];
+        const hitEl = doc === document
+          ? attempt(() => document.elementsFromPoint(x, y).find((n) => n !== this.host) || null, null)
+          : attempt(() => doc.elementFromPoint(x, y), null);
+        if (hitEl) {
+          tested += 1;
+          if (hitEl === el || el.contains(hitEl) || hitEl.contains(el)) return false;
+        }
+      }
+      return tested > 0;
     }
 
     schedule() {
@@ -1244,16 +1317,30 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         groups.set(t.el, g);
       });
       const list = [];
+      const seen = new Set();
       groups.forEach((g) => {
-        const r = g.el.getBoundingClientRect();
+        const r = contentRect(g.el);
         if (!r.width && !r.height) return;
         const clip = clipBox(g.el);
-        if (!intersect(r, clip)) return;
-        const o = intersect({ left: r.left - 3, top: r.top - 3, right: r.right + 3, bottom: r.bottom + 3 }, clip);
+        const shownPart = intersect(r, clip);
+        if (!shownPart) return;
+        const win = viewOf(g.el);
+        const onScreen = intersect(shownPart, { left: 0, top: 0, right: win.innerWidth, bottom: win.innerHeight });
+        if (!onScreen || this.covered(g.el, onScreen)) return;
+        const o = intersect({ left: r.left - 4, top: r.top - 4, right: r.right + 4, bottom: r.bottom + 4 }, clip);
         if (!o) return;
         const box = intersect({ left: o.left + off.left, top: o.top + off.top, right: o.right + off.left, bottom: o.bottom + off.top }, view);
-        if (box) list.push(Object.assign(g, { box }));
+        if (!box) return;
+        seen.add(g.el);
+        list.push(Object.assign(g, { box }));
       });
+      let changed = false;
+      this.targets.forEach((t) => {
+        const visible = Boolean(t.el && seen.has(t.el));
+        if (visible !== Boolean(t.visible)) changed = true;
+        t.visible = visible;
+      });
+      if (changed) this.updateSteps();
       const nodes = this.markNodes || (this.markNodes = []);
       while (nodes.length < list.length) {
         const d = document.createElement('div');
@@ -1278,18 +1365,39 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         n.b.className = `mb${g.pin ? ' cm' : ''}`;
         const bw = n.b.offsetWidth || label.length * 8 + 16;
         const bh = 20;
-        const midY = box.top + (box.bottom - box.top - bh) / 2;
-        const spots = [
-          { left: box.left, top: box.top - bh - 4 },
-          { left: box.left, top: box.bottom + 4 },
-          { left: box.left - bw - 6, top: midY },
-          { left: box.right + 6, top: midY },
-          { left: box.right - bw, top: box.top - bh - 4 },
-          { left: box.right - bw, top: box.bottom + 4 },
-        ].map((s) => ({ left: s.left, top: s.top, right: s.left + bw, bottom: s.top + bh }));
-        const inside = (s) => s.left >= view.left + 2 && s.top >= view.top + 2 && s.right <= view.right - 2 && s.bottom <= view.bottom - 2;
-        const free = (s) => !boxes.some((other, j) => j !== i && hit(s, other)) && !badges.some((other) => hit(s, other));
-        const spot = spots.find((s) => inside(s) && free(s)) || spots.find(inside) || spots[0];
+        const key = `${Math.round(box.left)},${Math.round(box.top)},${Math.round(box.right)},${Math.round(box.bottom)},${label},${list.length}`;
+        let spot = n.key === key ? n.spot : null;
+        if (!spot) {
+          const midY = box.top + (box.bottom - box.top - bh) / 2;
+          const spots = [
+            { left: box.left - 2, top: box.top - bh / 2 - 1 },
+            { left: box.left, top: box.top - bh - 4 },
+            { left: box.left - 2, top: box.bottom - bh / 2 + 1 },
+            { left: box.left - bw - 6, top: midY },
+            { left: box.right + 6, top: midY },
+            { left: box.left, top: box.bottom + 4 },
+            { left: box.right - bw + 2, top: box.top - bh / 2 - 1 },
+          ].map((s) => ({ left: s.left, top: s.top, right: s.left + bw, bottom: s.top + bh }));
+          const doc = g.el.ownerDocument;
+          const score = (s, k) => {
+            let total = k * 0.5;
+            if (s.left < view.left + 2 || s.top < view.top + 2 || s.right > view.right - 2 || s.bottom > view.bottom - 2) total += 100;
+            boxes.forEach((other, j) => {
+              if (j !== i && hit(s, other)) total += 6;
+            });
+            badges.forEach((other) => {
+              if (hit(s, other)) total += 30;
+            });
+            const y = s.top + bh / 2 - off.top;
+            [s.left + 5, (s.left + s.right) / 2, s.right - 5].forEach((x) => {
+              if (textAt(doc, x - off.left, y)) total += 10;
+            });
+            return total;
+          };
+          spot = spots.map((s, k) => ({ s, v: score(s, k) })).sort((a, b) => a.v - b.v)[0].s;
+          n.key = key;
+          n.spot = spot;
+        }
         const left = Math.min(Math.max(spot.left, view.left + 2), view.right - bw - 2);
         const top = Math.min(Math.max(spot.top, view.top + 2), view.bottom - bh - 2);
         n.b.style.left = `${left}px`;
