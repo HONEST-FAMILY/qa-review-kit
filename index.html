@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>검수판 · 고친 화면을 하나씩 넘기며 검수하기</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font-family:"Pretendard Variable",Pretendard,-apple-system,BlinkMacSystemFont,system-ui,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif;color:#111827;background:#f6f7f9;line-height:1.6;letter-spacing:-.01em;word-break:keep-all}
+.wrap{max-width:980px;margin:0 auto;padding:52px 22px 72px}
+.tag{display:inline-block;background:#dc2626;color:#fff;font-weight:800;font-size:13px;border-radius:999px;padding:2px 12px}
+h1{font-size:32px;line-height:1.35;margin:14px 0 10px;font-weight:800;text-wrap:balance;max-width:760px}
+.lead{font-size:16.5px;color:#374151;margin:0 0 24px;max-width:720px;text-wrap:pretty}
+.cta{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.btn{display:inline-flex;align-items:center;justify-content:center;height:48px;padding:0 22px;border-radius:12px;font:inherit;font-size:16px;font-weight:800;border:0;cursor:pointer;text-decoration:none}
+.btn.red{background:#dc2626;color:#fff}
+.btn.red:hover{background:#b91c1c}
+.btn.line{background:#fff;color:#111827;box-shadow:inset 0 0 0 1.5px #d1d5db}
+figure{margin:34px 0 0}
+figure img{display:block;width:100%;height:auto;border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.06),0 0 0 1px rgba(15,23,42,.08),0 30px 60px -30px rgba(15,23,42,.45)}
+figcaption{font-size:13.5px;color:#6b7280;margin-top:10px}
+.how{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;margin-top:30px}
+.box{background:#fff;border-radius:16px;padding:20px 22px;box-shadow:0 1px 2px rgba(15,23,42,.05),0 0 0 1px rgba(15,23,42,.06)}
+.box h2{font-size:17px;margin:0 0 8px;font-weight:800}
+.box p{margin:0 0 12px;color:#374151;font-size:14.5px}
+ol{margin:0;padding-left:20px}
+ol li{margin:5px 0;font-size:14.5px;color:#374151}
+.install{border:1.5px solid #dc2626}
+.bm{display:inline-flex;align-items:center;gap:8px;height:42px;padding:0 18px;border-radius:999px;background:#111827;color:#fff;font-weight:800;text-decoration:none;cursor:grab}
+.bm i{width:11px;height:11px;border-radius:50%;background:#dc2626;display:inline-block}
+.small{font-size:13px;color:#6b7280;margin:12px 0 0}
+@media (max-width:760px){
+h1{font-size:25px}
+.wrap{padding:34px 18px 56px}
+.cta .btn{flex:1 1 100%}
+.how{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="tag">검수판</span>
+  <h1>고친 화면을 하나씩 넘기며 검수하고, 댓글은 한 번에 AI에게 넘겨요</h1>
+  <p class="lead">원본 내용·조치 내용·검수 시나리오는 오른쪽 위 빨간 상자에, 지금 볼 항목은 오른쪽 아래 카드에 있어요. [다음]을 누르면 다음 항목으로 넘어가면서 사이트 위 빨간 표시도 함께 옮겨가요.</p>
+  <div class="cta">
+    <button class="btn red" type="button" id="open-demo">예시로 검수판 열어 보기</button>
+    <a class="btn line" href="demo/app/index.html">예시 사이트만 보기</a>
+  </div>
+
+  <figure>
+    <img src="assets/preview.jpg" width="1440" height="900" alt="왼쪽에 예시 사이트, 오른쪽 위에 검수 시나리오 목록, 오른쪽 아래에 지금 볼 항목과 댓글이 있는 검수판 화면">
+    <figcaption>사이트 옆에 나란히 열려서 빨간 표시를 가리지 않아요. 검수완료한 항목은 초록 체크, 댓글 단 항목은 주황 느낌표로 바뀌어요.</figcaption>
+  </figure>
+
+  <div class="how">
+    <section class="box">
+      <h2>쓰는 순서</h2>
+      <ol>
+        <li>AI가 작업을 끝내면 보고에 검수판 링크를 남기거나, 크롬에 검수판을 열어 둬요.</li>
+        <li>[다음]으로 넘기며 빨간 표시대로 눌러 보고, 다 봤으면 [검수완료]를 눌러요.</li>
+        <li>고칠 게 있으면 그 항목에 댓글을 남겨요. [화면에서 위치 찍기]로 어느 곳인지도 붙일 수 있어요.</li>
+        <li>끝나면 [AI에게 넘기기]로 복사해 이슈 댓글에 붙여 넣고 "댓글 단 거 고쳐줘"라고 적어요.</li>
+        <li>다음 검수판에는 고친 항목과 아직 안 본 항목만 나오고, 검수완료한 항목은 빠져요.</li>
+      </ol>
+    </section>
+    <section class="box install">
+      <h2>검수판 단추 설치 (한 번만)</h2>
+      <p>아래 단추를 크롬 북마크 막대로 끌어다 놓으세요. 검수판 링크를 연 뒤 이 북마크를 누르면 검수판이 열리고, 닫았던 검수판도 이어서 열려요.</p>
+      <a class="bm" id="bookmarklet" href="#">검수판<i></i></a>
+      <p class="small">북마크 막대가 안 보이면 Ctrl + Shift + B 를 누르세요. 체크와 댓글은 이 PC 크롬에 저장돼요.</p>
+    </section>
+  </div>
+</div>
+<script src="demo/spec.js"></script>
+<script src="qa-review.js"></script>
+<script>
+(() => {
+  const base = new URL('./', location.href).href;
+  const code = "(function(){var d=document,s=d.createElement('script');s.src='" + new URL('qa-review.js', base).href + "?v='+Date.now();s.dataset.boot='resume';(d.head||d.documentElement).appendChild(s);})();";
+  const bm = document.getElementById('bookmarklet');
+  bm.setAttribute('href', 'javascript:' + code);
+  bm.addEventListener('click', (e) => {
+    e.preventDefault();
+    alert('이 단추는 누르는 게 아니라 북마크 막대로 끌어다 놓는 거예요.');
+  });
+  document.getElementById('open-demo').addEventListener('click', () => {
+    window.qaReview.open(window.DEMO_SPEC(base), { url: new URL('demo/app/reports.html', base).href });
+  });
+})();
+</script>
+</body>
+</html>

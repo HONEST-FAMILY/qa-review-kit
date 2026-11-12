@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>설정 · 가상 학원 (예시)</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-page="settings">
+<div class="shell">
+  <aside class="side">
+    <div class="logo"><i></i>가상 학원</div>
+    <a href="index.html" data-page="home">처음 화면</a>
+    <a href="students.html" data-page="students">학생 관리</a>
+    <a href="reports.html" data-page="reports">리포트센터</a>
+    <a href="settings.html" data-page="settings">설정</a>
+    <div class="who">원장 (예시 계정)</div>
+  </aside>
+  <main class="main">
+    <div class="top"><h1>설정</h1></div>
+    <section class="panel">
+      <h3 style="margin:0 0 6px">운영 · 리포트 기준</h3>
+      <div class="field"><input type="checkbox" id="style-opinion"><div><label for="style-opinion">선생님 말투로 소견 초안 쓰기</label><div class="desc">리포트 발송 창에 [선생님 말투로 초안 쓰기] 단추가 생겨요.</div></div></div>
+      <div class="field"><input type="checkbox" id="weekly" checked><div><label for="weekly">매주 금요일 리포트 알림</label><div class="desc">이번 검수와 상관없는 설정이에요.</div></div></div>
+      <div class="row" style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn pri" type="button" data-slot="save">운영·리포트 기준 저장</button></div>
+    </section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

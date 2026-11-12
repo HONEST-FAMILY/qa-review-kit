@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>학생 관리 · 가상 학원 (예시)</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-page="students">
+<div class="shell">
+  <aside class="side">
+    <div class="logo"><i></i>가상 학원</div>
+    <a href="index.html" data-page="home">처음 화면</a>
+    <a href="students.html" data-page="students">학생 관리</a>
+    <a href="reports.html" data-page="reports">리포트센터</a>
+    <a href="settings.html" data-page="settings">설정</a>
+    <div class="who">원장 (예시 계정)</div>
+  </aside>
+  <main class="main">
+    <div class="top"><h1>학생 관리</h1><span class="sp"></span><button class="btn pri" type="button" data-open="excel">엑셀 명단으로 한 번에 등록</button></div>
+    <section class="panel">
+      <p class="count">재원생 3명</p>
+      <table>
+        <thead><tr><th>이름</th><th>학년</th><th class="hide-m">반</th><th class="hide-m">학부모 연락처</th></tr></thead>
+        <tbody>
+          <tr><td>가상하늘</td><td>초6</td><td class="hide-m">월수 심화반</td><td class="hide-m">010-0000-0001</td></tr>
+          <tr><td>가상바다</td><td>초6</td><td class="hide-m">화목 기본반</td><td class="hide-m">010-0000-0002</td></tr>
+          <tr><td>가상구름</td><td>중1</td><td class="hide-m">월수 중등반</td><td class="hide-m">010-0000-0003</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</div>
+<div class="dim" id="excel" role="dialog" aria-modal="true" aria-label="엑셀 명단 등록">
+  <div class="dlg">
+    <h2>엑셀 명단으로 학생 한 번에 등록</h2>
+    <p class="sub">파일을 올리거나 표를 복사해 붙여 넣으세요. 칸 이름이 달라도 알아서 맞춰요.</p>
+    <div class="paste">
+      <label for="paste-box"><b>또는 엑셀에서 표를 복사해 붙여 넣기</b></label>
+      <textarea id="paste-box" placeholder="여기에 붙여 넣기"></textarea>
+      <div class="row" style="justify-content:flex-start"><button class="btn sm pri" type="button" data-slot="read">붙여 넣은 표 읽기</button></div>
+    </div>
+    <div data-slot="result" hidden>
+      <p class="ok-line">붙여넣기 · 낯선 칸 이름도 자동으로 맞췄어요</p>
+      <table class="map">
+        <thead><tr><th>엑셀 칸</th><th>들어갈 곳</th></tr></thead>
+        <tbody>
+          <tr><td>아이 이름</td><td>학생 이름</td></tr>
+          <tr><td>엄마 폰</td><td>학부모 연락처</td></tr>
+          <tr><td>본인 폰</td><td>학생 연락처</td></tr>
+          <tr><td>수강 클래스</td><td>반</td></tr>
+          <tr><td>번호</td><td>가져오지 않음</td></tr>
+        </tbody>
+      </table>
+      <div class="row"><button class="btn" type="button" data-slot="again">다른 명단 올리기</button><button class="btn pri" type="button" data-slot="register" disabled>학생 2명 등록</button></div>
+    </div>
+    <div class="row"><button class="btn" type="button" data-close>닫기</button></div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

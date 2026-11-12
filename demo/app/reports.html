@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>리포트센터 · 가상 학원 (예시)</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body data-page="reports">
+<div class="shell">
+  <aside class="side">
+    <div class="logo"><i></i>가상 학원</div>
+    <a href="index.html" data-page="home">처음 화면</a>
+    <a href="students.html" data-page="students">학생 관리</a>
+    <a href="reports.html" data-page="reports">리포트센터</a>
+    <a href="settings.html" data-page="settings">설정</a>
+    <div class="who">원장 (예시 계정)</div>
+  </aside>
+  <main class="main">
+    <div class="top"><h1>리포트센터</h1><span class="sp"></span><button class="btn pri" type="button">리포트 만들기</button></div>
+    <section class="panel">
+      <div class="chips">
+        <button class="chip" type="button" data-filter="all" aria-pressed="true">전체</button>
+        <button class="chip" type="button" data-filter="unread" aria-pressed="false">안 읽음만 보기</button>
+      </div>
+      <p class="count" data-slot="count">리포트 4건</p>
+      <table>
+        <thead><tr><th>학생</th><th class="hide-m">수업</th><th>상태</th><th>열람</th><th></th></tr></thead>
+        <tbody>
+          <tr data-read="no"><td>가상하늘</td><td class="hide-m">초6 수학 심화</td><td><span class="badge b-amber">미발송</span></td><td class="read"><span class="badge b-gray">안 읽음</span></td><td><button class="btn sm send" type="button" data-open="send" data-student="가상하늘">발송하기</button></td></tr>
+          <tr data-read="yes"><td>가상바다</td><td class="hide-m">초6 수학 기본</td><td><span class="badge b-green">발송 완료</span></td><td class="read"><span class="badge b-green">읽음 11월 12일</span></td><td><button class="btn sm send" type="button" data-open="send" data-student="가상바다">발송하기</button></td></tr>
+          <tr data-read="no"><td>가상구름</td><td class="hide-m">중1 수학</td><td><span class="badge b-green">발송 완료</span></td><td class="read"><span class="badge b-gray">안 읽음</span></td><td><button class="btn sm send" type="button" data-open="send" data-student="가상구름">발송하기</button></td></tr>
+          <tr data-read="yes"><td>가상별</td><td class="hide-m">중2 영어</td><td><span class="badge b-green">발송 완료</span></td><td class="read"><span class="badge b-green">읽음 11월 11일</span></td><td><button class="btn sm send" type="button" data-open="send" data-student="가상별">발송하기</button></td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</div>
+<div class="dim" id="send" role="dialog" aria-modal="true" aria-label="리포트 발송">
+  <div class="dlg">
+    <h2>리포트 발송 · <span data-slot="student">학생</span></h2>
+    <p class="sub">학부모님께 보낼 내용을 확인해 주세요.</p>
+    <div class="preview">이번 주 수업 4회 · 숙제 4/4 · 단원 평가 92점</div>
+    <details class="box">
+      <summary>선생님 소견 확인 · 고치기</summary>
+      <div class="opinion">
+        <span class="badge b-gray" data-slot="badge">기록으로 자동 작성</span>
+        <p class="note" data-slot="note"></p>
+        <textarea aria-label="선생님 소견"></textarea>
+        <div class="acts">
+          <button class="btn sm" type="button" data-slot="draft-btn">선생님 말투로 초안 쓰기</button>
+          <button class="btn sm" type="button">수업 기록으로 다시 쓰기</button>
+          <button class="btn sm pri" type="button" data-slot="save">소견 저장</button>
+        </div>
+      </div>
+    </details>
+    <div class="row"><button class="btn" type="button" data-close>닫기</button><button class="btn pri" type="button" disabled>문자로 보내기</button></div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
