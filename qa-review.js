@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.1.0';
+  const VERSION = '2.1.1';
   const SCRIPT_URL = 'https://honest-family.github.io/qa-review-kit/qa-review.js';
   const me = document.currentScript;
   const boot = (me && me.dataset && me.dataset.boot) || '';
@@ -2237,7 +2237,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       }
       const after = h && h.phase && said[h.phase] ? `${said[h.phase]} ${this.issueRef()} · ` : '';
       if (c.needs) {
-        set(`${after}남은 ${c.todo} · 고칠 것 <b>${c.needs}</b>`, `고칠 것 ${c.needs}개 AI에게 넘기기`, 'handoff', 'red');
+        set(`${after}확인 전 ${c.todo} · 고칠 것 <b>${c.needs}</b>`, `고칠 것 ${c.needs}개 AI에게 넘기기`, 'handoff', 'red');
         return;
       }
       set(`${after}검수완료 <b>${c.done}</b> / ${c.all}`, c.todo ? '다음 검수항목 ›' : '', 'next-left', 'dark');
