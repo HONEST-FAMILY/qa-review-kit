@@ -1,14 +1,14 @@
 (() => {
   'use strict';
 
-  const VERSION = '1.0.0';
+  const VERSION = '2.0.0';
   const SCRIPT_URL = 'https://honest-family.github.io/qa-review-kit/qa-review.js';
   const me = document.currentScript;
   const boot = (me && me.dataset && me.dataset.boot) || '';
 
   if (window.qaReview && window.qaReview.version) {
     if (boot === 'resume' && window.qaReview.resume) {
-      if (String(location.hash).includes('qa-review=') && window.qaReview.fromHash) window.qaReview.fromHash();
+      if (/[#?&]qa(-review)?=/.test(`${location.hash}&${location.search}`) && window.qaReview.fromHash) window.qaReview.fromHash();
       else window.qaReview.resume();
     }
     return;
@@ -33,6 +33,8 @@
   const ON = 'qa-review-on';
   const TIP = 'qa-review-tip';
   const HASH = 'qa-review=';
+  const PARAM = 'qa';
+  const ITEM_PARAM = 'qa-item';
   const SIDE = 412;
   const SPLIT_MIN = 1280;
   const STATUS = { todo: '미검수', needs: '추가 검토', done: '검수완료' };
@@ -718,6 +720,13 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.modalDone = null;
       this.loadingSince = 0;
       this.onScroll = () => this.schedule();
+      this.onStorage = (e) => {
+        if (!this.spec || e.key !== KEY + this.spec.id || !e.newValue) return;
+        const saved = attempt(() => JSON.parse(e.newValue), null);
+        if (!saved || !saved.state || !saved.state.items) return;
+        this.state.items = merge(this.spec, saved.state).items;
+        this.renderAll();
+      };
       this.onResize = () => {
         this.applyView();
         this.schedule();
@@ -804,6 +813,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       document.addEventListener('keydown', this.onKey, true);
       addEventListener('resize', this.onResize);
       addEventListener('scroll', this.onScroll, true);
+      addEventListener('storage', this.onStorage);
       if (!this.timer) this.timer = setInterval(() => this.tick(), 700);
       if (!this.drawTimer) this.drawTimer = setInterval(() => this.draw(), 120);
     }
@@ -822,7 +832,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         this.state.cur = first ? first.id : '';
       }
       local.put(LAST, spec.id);
-      session.put(ON, spec.id);
+      local.put(ON, spec.id);
       const startUrl = opts.url || location.href.split('#')[0];
       if (opts.frame !== false && window.top === window && !this.shell) {
         this.loadingSince = Date.now();
@@ -844,7 +854,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       local.set(KEY + this.spec.id, { v: 1, spec: this.raw, state: this.state, savedAt: Date.now() });
     }
 
-    destroy() {
+    destroy(opts) {
       clearInterval(this.timer);
       this.timer = 0;
       clearInterval(this.drawTimer);
@@ -853,14 +863,17 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       document.removeEventListener('keydown', this.onKey, true);
       removeEventListener('resize', this.onResize);
       removeEventListener('scroll', this.onScroll, true);
+      removeEventListener('storage', this.onStorage);
       this.save();
+      const keep = Boolean(opts && opts.keep);
+      if (!keep) local.put(ON, null);
       session.put(ON, null);
       this.host.remove();
       const href = this.shell ? this.shell.href() : '';
       if (this.shell) this.shell.destroy();
       this.shell = null;
       app = null;
-      if (href && sameOrigin(href) && pageKey(href) !== pageKey(location.href)) location.href = href;
+      if (!keep && href && sameOrigin(href) && pageKey(href) !== pageKey(location.href)) location.href = href;
     }
 
     isPhone() {
@@ -976,8 +989,8 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
           this.shell.go(it.url);
         } else {
           this.save();
-          session.put(ON, this.spec.id);
-          this.toast('다른 화면으로 옮겨요. 옮긴 뒤 검수판 단추를 다시 눌러 주세요');
+          local.put(ON, this.spec.id);
+          this.toast('다른 화면으로 옮겨요');
           setTimeout(() => {
             location.href = it.url;
           }, 700);
@@ -1496,7 +1509,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         this.applyView();
         this.save();
       } else if (act === 'close') {
-        this.confirm('검수판을 닫을까요?', '체크와 댓글은 이 브라우저에 남아 있어요. 검수판 단추를 누르면 이어서 볼 수 있어요.', '닫기', () => this.destroy());
+        this.confirm('검수판을 닫을까요?', '체크와 댓글은 이 브라우저에 남아 있어요. 검수 링크를 다시 열면 이어서 볼 수 있어요.', '닫기', () => this.destroy());
       } else if (act === 'tab') {
         this.state.tab = el.dataset.tab;
         this.ui.body.scrollTop = 0;
@@ -1872,6 +1885,13 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
     }
   }
 
+  const resumeUrl = (saved) => {
+    const here = location.href.split('#')[0];
+    const last = saved && saved.state && saved.state.lastUrl;
+    const kind = attempt(() => performance.getEntriesByType('navigation')[0].type, '');
+    return kind === 'reload' && last && sameOrigin(last) ? last : here;
+  };
+
   const api = {
     version: VERSION,
     src: SCRIPT_URL,
@@ -1879,16 +1899,16 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
     open(spec, opts) {
       if (!spec || !Array.isArray(spec.items)) throw new Error('qaReview.open: spec.items 가 필요합니다');
       const options = opts || {};
-      if (app && app.spec && String(spec.id || 'review') !== app.spec.id) app.destroy();
+      if (app && app.spec && String(spec.id || 'review') !== app.spec.id) app.destroy({ keep: true });
       if (!app) app = new App();
       return app.load(spec, options);
     },
     resume(opts) {
       const options = opts || {};
-      const id = local.text(LAST);
+      const id = local.text(ON) || local.text(LAST);
       const saved = id ? local.get(KEY + id) : null;
       if (!saved || !saved.spec) {
-        if (!options.quiet) flash('이 주소에 저장된 검수판이 없어요. 검수판 링크를 먼저 열어 주세요');
+        if (!options.quiet) flash('이 주소에 저장된 검수판이 없어요. 검수 링크를 먼저 열어 주세요');
         return null;
       }
       if (app && app.spec && app.spec.id === id) {
@@ -1896,7 +1916,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         app.renderAll();
         return app.summary();
       }
-      return api.open(saved.spec, { url: location.href.split('#')[0], frame: options.frame });
+      return api.open(saved.spec, { url: resumeUrl(saved), frame: options.frame, start: options.start });
     },
     close() {
       if (app) app.destroy();
@@ -1923,36 +1943,66 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         return { found: Boolean(found.el), matches: found.matches, invalid: Boolean(found.invalid) };
       });
     },
-    link: async (spec, url) => `${String(url || location.href).split('#')[0]}#${HASH}${await encodeSpec(spec)}`,
+    link: async (spec, url) => `${String(url || location.href).split('#')[0]}#${PARAM}=${await encodeSpec(spec)}`,
     decode: (payload) => decodeSpec(payload),
   };
   window.qaReview = api;
 
-  const startFromHash = async () => {
-    const hash = location.hash || '';
-    const at = hash.indexOf(HASH);
-    if (at < 0) return false;
-    const payload = decodeURIComponent(hash.slice(at + HASH.length).split('&')[0]);
-    const clean = location.href.split('#')[0];
-    try {
-      const spec = await decodeSpec(payload);
-      attempt(() => history.replaceState(history.state, '', clean), null);
-      api.open(spec, { url: clean });
-    } catch (e) {
-      flash('검수판 링크를 읽지 못했어요. 링크가 끝까지 복사됐는지 확인해 주세요');
-    }
-    return true;
+  const readParam = () => {
+    const pieces = `${String(location.hash || '').replace(/^#/, '')}&${String(location.search || '').replace(/^\?/, '')}`.split('&');
+    const find = (key) => {
+      const hit = pieces.find((p) => p === key || p.indexOf(`${key}=`) === 0);
+      return hit == null ? null : attempt(() => decodeURIComponent(hit.slice(key.length + 1)), '');
+    };
+    const value = find(PARAM);
+    if (value != null) return { value: value.trim(), item: find(ITEM_PARAM) || '' };
+    const legacy = find(HASH.slice(0, -1));
+    return legacy != null ? { value: legacy.trim(), item: '' } : null;
   };
 
-  api.fromHash = startFromHash;
+  const dropParam = () => attempt(() => {
+    const strip = (raw) => raw.split('&').filter((p) => p && !/^(qa|qa-item|qa-review)(=|$)/.test(p)).join('&');
+    const hash = strip(String(location.hash || '').replace(/^#/, ''));
+    const search = strip(String(location.search || '').replace(/^\?/, ''));
+    const next = `${location.origin}${location.pathname}${search ? `?${search}` : ''}${hash ? `#${hash}` : ''}`;
+    if (next !== location.href) history.replaceState(history.state, '', next);
+  }, null);
 
   const start = async () => {
-    if (await startFromHash()) return;
+    if (boot === 'manual') return false;
+    const param = readParam();
+    if (param) {
+      dropParam();
+      if (param.value === 'off') {
+        local.put(ON, null);
+        session.put(ON, null);
+        if (app) app.destroy({ keep: true });
+        flash('검수판을 껐어요. 다시 보려면 주소 끝에 #qa=on 을 붙여 주세요');
+        return true;
+      }
+      if (!param.value || param.value === 'on') {
+        api.resume({ start: param.item });
+        return true;
+      }
+      try {
+        const spec = await decodeSpec(/^[0-2]\./.test(param.value) ? param.value : `2.${param.value}`);
+        api.open(spec, { url: location.href.split('#')[0], start: param.item });
+      } catch (e) {
+        flash('검수 링크를 읽지 못했어요. 링크가 끝까지 복사됐는지 확인해 주세요');
+      }
+      return true;
+    }
     if (boot === 'resume') {
       api.resume();
-      return;
+      return true;
     }
-    if (session.text(ON)) api.resume({ quiet: true });
+    if (local.text(ON) || session.text(ON)) api.resume({ quiet: true });
+    return false;
   };
+
+  api.fromHash = start;
+  addEventListener('hashchange', () => {
+    if (readParam()) start();
+  });
   start();
 })();

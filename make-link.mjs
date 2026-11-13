@@ -20,7 +20,7 @@ if (!Array.isArray(spec.items) || !spec.items.length) {
 const packed = deflateRawSync(Buffer.from(JSON.stringify(spec), 'utf8'));
 const page = url.split('#')[0];
 if (sealAt < 0) {
-  console.log(`${page}#qa-review=1.${packed.toString('base64url')}`);
+  console.log(`${page}#qa=1.${packed.toString('base64url')}`);
   process.exit(0);
 }
 const name = randomBytes(10).toString('hex');
@@ -30,4 +30,4 @@ const cipher = createCipheriv('aes-256-gcm', key, iv);
 const sealed = Buffer.concat([iv, cipher.update(packed), cipher.final(), cipher.getAuthTag()]);
 mkdirSync(sealDir, { recursive: true });
 writeFileSync(join(sealDir, `${name}.bin`), sealed);
-console.log(JSON.stringify({ link: `${page}#qa-review=2.${name}.${key.toString('base64url')}`, file: `specs/${name}.bin` }));
+console.log(JSON.stringify({ link: `${page}#qa=${name}.${key.toString('base64url')}`, file: `specs/${name}.bin` }));
