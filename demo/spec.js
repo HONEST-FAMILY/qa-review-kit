@@ -56,8 +56,8 @@ window.DEMO_SPEC = (base) => {
         env: '예시 사이트',
         account: '원장 (예시)',
         steps: [
-          { text: "첫 줄 가상하늘의 [발송하기]를 누르면 '리포트 발송 · 가상하늘' 창이 열린다.", mark: { selector: 'button.send', label: '누르기' } },
-          { text: "'선생님 소견 확인 · 고치기'를 눌러 펼친다.", mark: { selector: '#send summary' } },
+          { text: "첫 줄 가상하늘의 [발송하기]를 누르면 '리포트 발송 · 가상하늘' 창이 열린다.", mark: { selector: 'button.send', label: '누르기', open: true } },
+          { text: "'선생님 소견 확인 · 고치기'를 눌러 펼친다.", mark: { selector: '#send summary', open: true } },
           { text: "[선생님 말투로 초안 쓰기]를 누르면 1초쯤 뒤 '선생님 말투 초안' 배지와 '지난 소견 3개의 말투를 참고한 초안입니다'가 보인다.", mark: [{ selector: '#send [data-slot="draft-btn"]', label: '누르기' }, { selector: '#send [data-slot="badge"]', label: '확인' }] },
           { text: '[소견 저장]은 누르지 않고 [닫기]로 창을 닫는다.', mark: { selector: '#send [data-close]' } },
         ],
@@ -70,7 +70,7 @@ window.DEMO_SPEC = (base) => {
         env: '예시 사이트',
         account: '원장 (예시)',
         steps: [
-          { text: "[엑셀 명단으로 한 번에 등록]을 누르면 '엑셀 명단으로 학생 한 번에 등록' 창이 열린다.", mark: { selector: 'button', text: '엑셀 명단으로 한 번에 등록', label: '누르기' } },
+          { text: "[엑셀 명단으로 한 번에 등록]을 누르면 '엑셀 명단으로 학생 한 번에 등록' 창이 열린다.", mark: { selector: 'button', text: '엑셀 명단으로 한 번에 등록', label: '누르기', open: true } },
           { text: "'또는 엑셀에서 표를 복사해 붙여 넣기' 칸에 아래 표를 붙여 넣는다.", mark: { selector: '#paste-box' }, copy: '번호,아이 이름,엄마 폰,본인 폰,수강 클래스\n1,가상하늘,010-1111-2222,010-3333-4444,월수 심화반\n2,가상바다,010-5555-6666,,화목 기본반' },
           { text: "[붙여 넣은 표 읽기]를 누르면 '붙여넣기 · 낯선 칸 이름도 자동으로 맞췄어요'가 보이고, 아이 이름은 학생 이름, 엄마 폰은 학부모 연락처로 잡힌다.", mark: [{ selector: '[data-slot="read"]', label: '누르기' }, { selector: '.ok-line', label: '확인' }] },
           { text: '[학생 2명 등록]은 누르지 않고 [다른 명단 올리기]를 누른다.', mark: { selector: '[data-slot="again"]' } },
@@ -85,8 +85,8 @@ window.DEMO_SPEC = (base) => {
         account: '원장 (예시)',
         steps: [
           { text: "'선생님 말투로 소견 초안 쓰기' 체크를 끄고 [운영·리포트 기준 저장]을 누르면 '설정을 저장했습니다' 알림이 뜬다.", mark: [{ selector: '#style-opinion', label: '끄기' }, { selector: '[data-slot="save"]', label: '누르기' }] },
-          { text: `리포트센터 \`${at('demo/app/reports.html')}\` 로 가서 [발송하기] 창의 '선생님 소견 확인 · 고치기'를 펼치면 [선생님 말투로 초안 쓰기]가 없다.`, mark: { selector: 'button.send', label: '누르기' } },
-          { text: '설정으로 돌아가 체크를 다시 켜고 저장한다.' },
+          { url: at('demo/app/reports.html'), text: `리포트센터 \`${at('demo/app/reports.html')}\` 로 가서 [발송하기] 창의 '선생님 소견 확인 · 고치기'를 펼치면 [선생님 말투로 초안 쓰기]가 없다.`, mark: { selector: 'button.send', label: '누르기' } },
+          { url: at('demo/app/settings.html'), text: '설정으로 돌아가 체크를 다시 켜고 저장한다.' },
         ],
         ai: { result: '일치', at: '11월 12일 15:18', lines: ['2 단추 없음: 일치', '3 다시 켬'] },
       },

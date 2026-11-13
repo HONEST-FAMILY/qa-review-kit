@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.0.2';
+  const VERSION = '3.0.3';
   const SCRIPT_URL = 'https://honest-family.github.io/qa-review-kit/qa-review.js';
   const me = document.currentScript;
   const boot = (me && me.dataset && me.dataset.boot) || '';
@@ -43,7 +43,10 @@
   // 화면 표시가 없는 단계는 누를 수 없게 보이고(눌러도 '표시할 곳이 없어요'라고 하지 않는다), 다른 주소 항목의 단계를 누르면 그 화면으로 가라고 알려 준다.
   // 3.0.2 — 못 한 요청 장에 고객 요청 원문(ask)·못 한 까닭(why)을 보이고, 고객에게 나갈 말(say, AI 초안)을 그 자리에서 고쳐 쓴다.
   // 고쳐 쓴 말은 체크와 함께 저장되고, 대시보드가 고객 일지 '남은 부분'을 그 말로 바꾼다(고객 링크를 열기 전까지). 비우면 일지에서 빠진다.
-  const STATUS = { todo: '확인 전', needs: '고칠 것', done: '확인 완료' };
+  // 3.0.3 — 단계를 누르면 그 단계 화면으로 데려간다: 다른 화면이면 그 화면을 열고, 앞 단계의 여는 단추(open: true — 창 열기·펼치기처럼 데이터를 안 바꾸는 단추)를
+  // 대신 눌러 창·펼침을 띄운 뒤 빨간 표시를 깜빡인다(대표: "화면에 없다 그러는데 그럼 그 화면을 켜서 이동을 해"). 확인이 여럿이어도 하나씩 넘기지 않고
+  // [검토 완료] 하나로 그 요청을 끝내고 바로 다음 요청으로 간다(대표: "'다음 확인'이 아니라 '검토 완료' 버튼 누르면 그냥 아예 다음 칸으로"). 확인은 번호로 골라 본다.
+  const STATUS = { todo: '검토 전', needs: '고칠 것', done: '검토 완료' };
   const SAID = {
     waiting: '대시보드에 접수됐어요. 곧 고치기 시작해요',
     running: 'AI가 고치는 중이에요',
@@ -53,6 +56,9 @@
     blocked: 'AI가 착수하지 못했어요. 대시보드 이슈를 봐 주세요',
   };
   const STATE_PARAM = 'qa-st';
+  // 3.0.3 — 단계를 눌러 다른 주소로 옮겨 갈 때 그 단계 번호(주소 뒤 #), 틀 없이 화면을 새로 열 때 이 탭에 잠깐 남기는 자리
+  const STEP_PARAM = 'qa-step';
+  const STEP_KEY = 'qa-review-step';
   const EXTRA = '__extra';
   const END = '__end';
   // 2.1.0 (2026-11-13) — 검수판을 대시보드에 붙였다: 체크 저장 · [AI에게 넘기기]가 이슈 추가요청으로 바로 등록 · 모두 검수완료면 고객 링크
@@ -762,6 +768,10 @@ li{margin:3px 0;font-size:13px;line-height:1.55}
 .sayta:focus{border-color:#dc2626;box-shadow:0 0 0 3px rgba(220,38,38,.1)}
 .sayta[readonly]{background:#f9fafb;color:#4b5563}
 .lnk{display:inline-block;background:none;border:0;padding:0;margin-top:6px;color:#6b7280;font-size:12px;text-decoration:underline;cursor:pointer}
+.cks{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 10px}
+.ck{min-width:30px;height:28px;padding:0 10px;border-radius:999px;border:1.5px solid #d1d5db;background:#fff;color:#374151;font:inherit;font-size:12.5px;font-weight:800;line-height:1;cursor:pointer}
+.ck:hover{border-color:#9ca3af;background:#f9fafb}
+.ck.on{background:#dc2626;border-color:#dc2626;color:#fff;cursor:default}
 .st.plain:hover{background:none}
 .st .n{flex:none;width:22px;height:22px;border-radius:50%;border:2px solid #dc2626;color:#dc2626;font-size:12px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;margin-top:1px;background:#fff}
 .st.on .n{background:#dc2626;color:#fff}
@@ -1119,6 +1129,13 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.autoPos = !at;
       this.state.cur = first.unit;
       this.state.chk = first.chk;
+      // 3.0.3 — 단계를 눌러 다른 주소로 옮겨 왔거나(qa-step) 틀 없이 화면을 새로 열었으면(이 탭에 남긴 자리) 그 단계 화면까지 이어서 연다
+      const pend = attempt(() => JSON.parse(session.text(STEP_KEY) || 'null'), null);
+      session.put(STEP_KEY, null);
+      const fresh = Boolean(pend && pend.id === spec.id && Date.now() - Number(pend.at) < 30000 && pend.cur === this.state.cur && Number(pend.chk) === this.state.chk);
+      const want = Number(opts.step) || (fresh ? Number(pend.step) : 0);
+      this.pending = want > 0 ? { step: want } : null;
+      this.reaching = false;
       local.put(LAST, spec.id);
       local.put(ON, spec.id);
       const here = opts.url || location.href.split('#')[0];
@@ -1135,6 +1152,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.mount();
       this.changed();
       if (spec.board) this.serverLoad(true);
+      if (this.pending) this.resumeStep();
       return this.summary();
     }
 
@@ -1377,7 +1395,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
     }
 
     // 다른 주소 확인 — 새 창 대신 이 창이 옮겨 간다. 체크·말·이름을 주소 뒤(#)에 실어 보내고(대시보드에도 저장), 저쪽이 같은 자리에서 이어 띄운다
-    async jump(it) {
+    async jump(it, extra) {
       if (this.jumping) return;
       this.jumping = true;
       setTimeout(() => {
@@ -1385,8 +1403,8 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       }, 5000);
       this.save();
       this.changed();
-      this.toast(`${placeName(it.url)} 화면으로 옮겨요`);
-      const url = await this.carry(it);
+      this.toast(`${placeName((extra && extra.url) || it.url)} 화면으로 옮겨요`);
+      const url = await this.carry(it, extra);
       if (this.synced) await Promise.race([this.pushNow().catch(() => null), new Promise((r) => setTimeout(r, 1500))]);
       location.href = url;
     }
@@ -1491,8 +1509,12 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       const here = Boolean(it.url) && !it.outside && sameOrigin(it.url);
       const away = Boolean(it.url) && !it.outside && !here;
       const marked = here && it.steps.some((x) => x.marks.length);
-      const sub = [total > 1 ? `확인 ${k + 1} / ${total}` : '', marked ? '화면에 빨간 표시가 따라가요' : ''].filter(Boolean).join(' · ');
+      const sub = [total > 1 ? `확인 ${total}개` : '', marked ? '화면에 빨간 표시가 따라가요' : ''].filter(Boolean).join(' · ');
       const head = `<h5>이렇게 확인하세요${sub ? `<span class="mu">${sub}</span>` : ''}</h5>`;
+      // 3.0.3 — 확인이 여럿이면 번호로 골라 본다([검토 완료]는 요청 전체를 끝내고 바로 다음 요청으로 간다)
+      const chips = total > 1
+        ? `<div class="cks">${u.checks.map((c, i) => `<button class="ck${i === k ? ' on' : ''}" type="button" data-act="chk" data-k="${i}" title="${esc(oneLine(String(c.title).replace(/\*\*|`/g, '')))}" aria-label="확인 ${i + 1}"${i === k ? ' aria-current="true"' : ''}>${i + 1}</button>`).join('')}</div>`
+        : '';
       const title = u.kind === 'check' ? '' : `<b class="ct">${inline(it.title)}</b>`;
       const extra = `${it.env ? `<span>${inline(it.env)}</span>` : ''}${it.account ? `<span>${inline(it.account)}</span>` : ''}`;
       let where = '';
@@ -1509,13 +1531,13 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       const sit = it.situation ? `<p class="sit">${inline(it.situation)}</p>` : '';
       const steps = it.steps.length ? `<ol class="steps">${it.steps.map((step, i) => {
         const mark = step.marks.length > 0 && here;
-        // 표시가 있는 단계만 누를 수 있다(누르면 화면의 그 자리로). 표시가 없거나 새 창에서 볼 항목은 그냥 글
-        const tap = step.marks.length > 0 && !it.outside;
+        // 표시가 있거나 다른 화면(url)에서 하는 단계만 누를 수 있다 — 누르면 그 단계 화면을 열고(앞 단계의 여는 단추까지 대신 눌러) 빨간 표시를 보여 준다. 새 창에서 볼 항목은 그냥 글
+        const tap = !it.outside && (step.marks.length > 0 || Boolean(step.url));
         return `<li class="st${tap ? '' : ' plain'}" data-step="${i + 1}"${tap ? ' data-act="step"' : ''}><span class="n${mark ? '' : ' nomark'}">${i + 1}</span><div class="tx">${inline(step.text)}`
           + `${step.copy ? `<div class="cpy"><pre>${esc(step.copy)}</pre><button type="button" data-act="copy" data-step="${i}">복사하기</button></div>` : ''}</div></li>`;
       }).join('')}</ol>` : '';
       const ai = it.ai ? this.aiHtml(it.ai) : '';
-      return `<div class="sec">${head}<div class="chk">${title}${where}${goto}${sit}${steps}${ai}</div></div>`;
+      return `<div class="sec">${head}${chips}<div class="chk">${title}${where}${goto}${sit}${steps}${ai}</div></div>`;
     }
 
     threadHtml(u) {
@@ -1547,7 +1569,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       const c = this.reqCounts();
       const sendSt = u.kind === 'send' ? this.statusOf(u) : 'todo';
       const head = `<div class="uh"><span class="tag">${u.kind === 'send' ? '마지막 · 고객에게 보낼 글' : '마무리'}</span>${sendSt !== 'todo' ? `<span class="pill ${sendSt}">${STATUS[sendSt]}</span>` : ''}</div>`;
-      const tally = c.all ? `<div class="tally"><span class="t-done">확인 완료<b>${c.done}</b></span><span class="t-needs">고칠 것<b>${c.needs}</b></span><span>아직 안 봄<b>${c.todo}</b></span></div>` : '';
+      const tally = c.all ? `<div class="tally"><span class="t-done">검토 완료<b>${c.done}</b></span><span class="t-needs">고칠 것<b>${c.needs}</b></span><span>아직 안 봄<b>${c.todo}</b></span></div>` : '';
       const reqs = this.reqUnits();
       const needs = reqs.filter((x) => this.statusOf(x) === 'needs');
       const todo = reqs.filter((x) => this.statusOf(x) === 'todo');
@@ -1575,28 +1597,25 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
     }
 
     // 박스 아래 — 지금 할 일 한 줄과 누를 버튼(왼쪽은 '고칠 게 있어요' 쪽, 오른쪽이 앞으로 가는 쪽)
+    // 3.0.3 — 확인이 여럿이어도 하나씩 넘기지 않는다. [검토 완료]를 누르면 그 요청은 끝(묶인 확인도 모두), 바로 다음 요청으로. 확인은 상자 안 번호로 골라 본다
     foot(u) {
       if (this.composing) return { say: '어디가 어떻게 다른지 적고 [남기기]를 눌러요. 화면에서 위치를 찍어도 돼요', a: ['취소', 'compose-cancel', 'ghost'], b: ['남기기', 'comment', 'red'], noBack: true };
       if (u.kind === 'send' || u.kind === 'end') return this.endFoot(u);
       const st = this.statusOf(u);
-      const k = this.state.chk;
-      const more = k < u.checks.length - 1;
-      const it = u.checks[k];
-      const last = this.nextOpen(u).kind === 'send' || this.nextOpen(u).kind === 'end';
-      const onward = more ? ['다음 확인 ›', 'next-check', 'dark'] : [last ? '마무리로 ›' : `다음 ${this.noun()} ›`, 'next-unit', 'dark'];
-      if (st === 'needs') return { say: more ? '고칠 것으로 남겼어요. 남은 확인도 봐 주세요' : '고칠 것으로 남겼어요. 다음으로 넘어가요', a: ['더 남기기', 'compose', 'outline'], b: onward };
-      if (st === 'done') return { say: '확인을 마친 요청이에요', a: ['확인 취소', 'undo', 'outline'], b: onward };
+      const it = u.checks[this.state.chk];
+      const nx = this.nextOpen(u);
+      const last = nx.kind === 'send' || nx.kind === 'end';
+      const onward = [last ? '마무리로 ›' : `다음 ${this.noun()} ›`, 'next-unit', 'dark'];
+      if (st === 'needs') return { say: '고칠 것으로 남겼어요. 다음으로 넘어가요', a: ['더 남기기', 'compose', 'outline'], b: onward };
+      if (st === 'done') return { say: '검토를 마친 요청이에요', a: ['검토 취소', 'undo', 'outline'], b: onward };
       const fix = ['고칠 게 있어요', 'compose', 'outline'];
-      if (it && it.url && !it.outside && !sameOrigin(it.url)) {
-        const where = placeName(it.url);
-        return { say: `이 확인은 ${where} 화면에서 해요`, a: fix, b: [`${where} 화면으로 가기 ›`, 'jump', 'dark'] };
-      }
-      const ok = more ? ['다음 확인 ›', 'next-check', 'ok'] : [last ? '맞아요 → 마무리' : `맞아요 → 다음 ${this.noun()}`, 'ok-unit', 'ok'];
+      const ok = ['검토 완료', 'ok-unit', 'ok'];
       let say;
-      if (u.kind === 'remain') say = this.board && this.board.share_url ? '이번에 못 한 요청이에요' : '고객에게 나갈 말을 고쳐 쓰고, 이대로 보내도 되면 [맞아요]';
-      else if (!it) say = '고객에게 이대로 나가도 되면 [맞아요]';
-      else if (it.outside) say = `[새 창에서 열기]로 확인하고 돌아와서 ${more ? '[다음 확인 ›]' : '[맞아요]'}`;
-      else say = `${(!it.url || onSite(it)) && it.steps.some((x) => x.marks.length) ? '빨간 표시대로' : '위 순서대로'} 해 보고 ${more ? '맞으면 [다음 확인 ›]' : '다 맞으면 [맞아요]'}`;
+      if (u.kind === 'remain') say = this.board && this.board.share_url ? '이번에 못 한 요청이에요' : '고객에게 나갈 말을 고쳐 쓰고, 이대로 보내도 되면 [검토 완료]';
+      else if (!it) say = '고객에게 이대로 나가도 되면 [검토 완료]';
+      else if (it.url && !it.outside && !sameOrigin(it.url)) say = `이 확인은 ${placeName(it.url)} 화면에서 해요. 다 봤으면 [검토 완료]`;
+      else if (it.outside) say = '[새 창에서 열기]로 확인하고 돌아와서 [검토 완료]';
+      else say = `${(!it.url || onSite(it)) && it.steps.some((x) => x.marks.length) ? '빨간 표시대로' : '위 순서대로'} 해 보고 다 맞으면 [검토 완료]`;
       return { say, a: fix, b: ok };
     }
 
@@ -1936,6 +1955,8 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       } else if (act === 'back') {
         const p = this.prevPlace();
         if (p) this.go(p.unit, p.chk);
+      } else if (act === 'chk') {
+        if (u) this.go(u.id, Number(el.dataset.k) || 0);
       } else if (act === 'next-check') {
         if (u) this.go(u.id, this.state.chk + 1);
       } else if (act === 'next-unit') {
@@ -1987,7 +2008,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         const it = this.check();
         if (it && it.url) window.open(it.url, '_blank', 'noopener');
       } else if (act === 'step') {
-        this.focusStep(Number(el.dataset.step));
+        this.reachStep(Number(el.dataset.step));
       } else if (act === 'copy') {
         const it = this.check();
         const step = it && it.steps[Number(el.dataset.step)];
@@ -2038,19 +2059,56 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       window.open(url, '_blank', 'noopener');
     }
 
-    focusStep(step) {
-      const it = this.check();
-      const s = it && it.steps[step - 1];
-      if (!s || !s.marks.length) return;
-      if (it.url && !onSite(it)) {
-        this.toast(`${placeName(it.url)} 화면으로 가면 빨간 표시가 나와요`);
-        return;
+    // 단계가 일어나는 화면 — 그 단계(또는 앞 단계)에 적힌 주소(step.url), 없으면 확인 주소.
+    // 그 화면을 연 뒤 대신 누를 여는 단추 — 확인의 open(이 확인을 시작하는 창·펼침)과 앞 단계 표시 중 open: true 인 것(창 열기·펼치기·탭 바꾸기처럼 데이터를 안 바꾸는 단추)
+    routeOf(it, step) {
+      let url = it.url || '';
+      let start = 0;
+      let own = false;
+      for (let i = 0; i < step; i += 1) {
+        const x = it.steps[i] && it.steps[i].url;
+        if (x) {
+          url = absUrl(String(x), it.url || this.spec.site) || url;
+          start = i;
+          own = true;
+        }
       }
+      const path = own ? [] : toList(it.open).map((m) => (typeof m === 'string' ? { text: m } : Object.assign({}, m)));
+      for (let i = start; i < step - 1; i += 1) {
+        it.steps[i].marks.forEach((m) => {
+          if (m.open) path.push(m);
+        });
+      }
+      return { url, path };
+    }
+
+    waitFor(test, ms) {
+      return new Promise((resolve) => {
+        const until = Date.now() + ms;
+        const check = () => {
+          if (attempt(() => Boolean(test()), false)) {
+            resolve(true);
+            return;
+          }
+          if (!this.spec || Date.now() > until) {
+            resolve(false);
+            return;
+          }
+          setTimeout(check, 150);
+        };
+        check();
+      });
+    }
+
+    // 그 단계의 빨간 표시로 화면을 옮기고 깜빡인다. 화면에 하나도 없으면 false
+    showStep(step) {
+      this.targets.forEach((t) => {
+        t.searched = 0;
+        if (t.el && !isShown(t.el)) t.el = null;
+      });
+      this.tick();
       const mine = this.targets.filter((t) => t.kind === 'step' && t.step === step && t.el);
-      if (!mine.length) {
-        this.toast('아직 화면에 없어요. 앞 단계를 하면 나타나요');
-        return;
-      }
+      if (!mine.length) return false;
       attempt(() => mine[0].el.scrollIntoView({ block: 'center', behavior: 'smooth' }), null);
       const until = Date.now() + 1900;
       mine.forEach((t) => {
@@ -2058,9 +2116,114 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       });
       setTimeout(() => this.draw(), 350);
       setTimeout(() => this.draw(), 2000);
+      return true;
     }
 
-    // [맞아요] — 이 요청은 확인 완료, 다음 안 본 요청으로
+    // 끝까지 열지 못했을 때 — 화면에 보이는 가장 가까운 앞 단계를 보여 주고 거기서부터 하라고 한다
+    stepFallback(step) {
+      for (let j = step - 1; j >= 1; j -= 1) {
+        if (this.showStep(j)) {
+          this.toast(`${j}단계부터 해 주세요. 그러면 ${step}단계 표시가 나와요`);
+          return;
+        }
+      }
+      this.toast('아직 화면에 없어요. 앞 단계를 하면 나타나요');
+    }
+
+    // 3.0.3 — 단계를 누르면 그 단계 화면으로 데려간다. 주소가 다르면 그 화면을 열고(다른 주소면 이 창이 옮겨 가서 이어서),
+    // 앞 단계의 여는 단추(open)를 차례로 대신 눌러 창·펼침을 띄운 뒤 그 단계의 빨간 표시를 깜빡인다.
+    // open 이 아닌 단추(저장·발송·초안 쓰기처럼 데이터를 바꾸는 것)는 누르지 않는다. 이미 열린 데까지는 건너뛴다(펼침 단추를 다시 눌러 닫지 않게).
+    async reachStep(step) {
+      const u = this.current();
+      const it = this.check();
+      const s = it && it.steps[step - 1];
+      if (!u || !s || it.outside || this.reaching || (!s.marks.length && !s.url)) return;
+      const route = this.routeOf(it, step);
+      if (route.url && !sameOrigin(route.url)) {
+        this.jump(it, { step, url: route.url });
+        return;
+      }
+      const where = `${u.id}|${this.state.chk}`;
+      const moved = () => !this.spec || `${this.state.cur}|${this.state.chk}` !== where;
+      const shown = (m) => {
+        const d = this.loadingSince ? null : this.doc();
+        return d ? findMark(d, m).el : null;
+      };
+      const goal = () => s.marks.some((m) => shown(m));
+      const onPage = () => !route.url || pageKey(route.url) === pageKey(this.href());
+      if (onPage() && goal()) {
+        this.showStep(step);
+        return;
+      }
+      this.reaching = true;
+      try {
+        if (!onPage()) {
+          if (!this.shell) {
+            // 틀 없이 띄운 화면 — 통째로 옮겨 가고, 새 화면에서 이 단계를 이어서 연다
+            session.put(STEP_KEY, JSON.stringify({ id: this.spec.id, cur: this.state.cur, chk: this.state.chk, step, at: Date.now() }));
+            this.save();
+            local.put(ON, this.spec.id);
+            this.toast('그 화면으로 옮겨요');
+            setTimeout(() => {
+              location.href = route.url;
+            }, 400);
+            return;
+          }
+          this.toast('그 화면을 여는 중이에요');
+          this.loadingSince = Date.now();
+          this.shell.go(route.url);
+          if (!(await this.waitFor(() => !this.loadingSince && onPage(), 15000)) || moved()) return;
+        }
+        if (!s.marks.length) {
+          this.toast('그 화면을 열었어요');
+          return;
+        }
+        if (route.path.length) {
+          if (!goal()) this.toast('그 화면을 여는 중이에요');
+          let guard = route.path.length * 2 + 2;
+          while (!goal() && guard > 0) {
+            guard -= 1;
+            if (moved()) return;
+            let i = -1;
+            for (let j = route.path.length - 1; j >= 0 && i < 0; j -= 1) if (shown(route.path[j])) i = j;
+            if (i < 0) {
+              if (!(await this.waitFor(() => goal() || route.path.some(shown), 6000))) break;
+              continue;
+            }
+            const el = shown(route.path[i]);
+            const next = route.path[i + 1] || null;
+            // 펼침 단추(필터 펼치기·소견 펼치기처럼 누를 때마다 열고 닫는 것)가 이미 열려 있으면 다시 누르지 않는다 — 누르면 접힌다
+            const already = el.getAttribute('aria-expanded') === 'true' || el.getAttribute('aria-pressed') === 'true' || (String(el.tagName).toUpperCase() === 'SUMMARY' && el.parentElement && el.parentElement.open);
+            if (already) break;
+            attempt(() => el.click(), null);
+            if (!(await this.waitFor(() => goal() || Boolean(next && shown(next)), 5000))) break;
+          }
+        } else {
+          await this.waitFor(goal, 4000);
+        }
+        if (moved()) return;
+        if (!goal() || !this.showStep(step)) this.stepFallback(step);
+      } finally {
+        this.reaching = false;
+      }
+    }
+
+    // 단계를 눌러 다른 주소로 옮겨 왔거나 화면을 새로 열었으면, 화면이 다 뜬 뒤 그 단계를 이어서 연다
+    async resumeStep() {
+      const p = this.pending;
+      this.pending = null;
+      if (!p) return;
+      const where = `${this.state.cur}|${this.state.chk}`;
+      const ready = await this.waitFor(() => !this.loadingSince && this.doc() && this.doc().readyState === 'complete', 15000);
+      if (!ready || !this.spec || `${this.state.cur}|${this.state.chk}` !== where) return;
+      setTimeout(() => this.reachStep(p.step), 300);
+    }
+
+    focusStep(step) {
+      this.reachStep(step);
+    }
+
+    // [검토 완료] — 이 요청은 끝(묶인 확인도 모두), 바로 다음 안 본 요청으로
     okUnit() {
       const u = this.current();
       if (!u) return;
@@ -2076,7 +2239,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.composing = false;
       this.save();
       const next = this.nextOpen(u);
-      this.toast(next.kind === 'send' || next.kind === 'end' ? '확인 완료 · 마무리만 남았어요' : `확인 완료 · 다음 ${this.noun()}이에요`);
+      this.toast(next.kind === 'send' || next.kind === 'end' ? '검토 완료 · 마무리만 남았어요' : `검토 완료 · 다음 ${this.noun()}이에요`);
       this.go(next.id, 0);
     }
 
@@ -2086,7 +2249,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       Object.assign(this.entry(u.key), { status: freshOf(u, this.state.items).length ? 'needs' : 'todo', at: Date.now() });
       this.save();
       this.render();
-      this.toast('확인을 취소했어요');
+      this.toast('검토를 취소했어요');
     }
 
     comment() {
@@ -2605,7 +2768,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
     }
 
     // 다른 주소 화면으로 갈 주소 — 검수판·지금 자리·체크·말·이름을 주소 뒤(#)에 싣는다. # 뒤는 서버로 가지 않는다
-    async carry(it) {
+    async carry(it, extra) {
       let src = this.src;
       let packed = '';
       try {
@@ -2614,9 +2777,11 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       } catch (e) {
         packed = '';
       }
-      if (!src) return it.url;
+      const dest = String((extra && extra.url) || it.url);
+      if (!src) return dest;
       const st = packed && packed.length < 150000 ? `&${STATE_PARAM}=${packed}` : '';
-      return `${String(it.url).split('#')[0]}#${PARAM}=${src}&${ITEM_PARAM}=${encodeURIComponent(this.state.cur)}~${this.state.chk}${st}`;
+      const step = extra && extra.step ? `&${STEP_PARAM}=${Number(extra.step)}` : '';
+      return `${dest.split('#')[0]}#${PARAM}=${src}&${ITEM_PARAM}=${encodeURIComponent(this.state.cur)}~${this.state.chk}${step}${st}`;
     }
 
     toast(message) {
@@ -2700,13 +2865,13 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       return hit == null ? null : attempt(() => decodeURIComponent(hit.slice(key.length + 1)), '');
     };
     const value = find(PARAM);
-    if (value != null) return { value: value.trim(), item: find(ITEM_PARAM) || '', st: find(STATE_PARAM) || '' };
+    if (value != null) return { value: value.trim(), item: find(ITEM_PARAM) || '', st: find(STATE_PARAM) || '', step: find(STEP_PARAM) || '' };
     const legacy = find(HASH.slice(0, -1));
-    return legacy != null ? { value: legacy.trim(), item: '', st: '' } : null;
+    return legacy != null ? { value: legacy.trim(), item: '', st: '', step: '' } : null;
   };
 
   const dropParam = () => attempt(() => {
-    const strip = (raw) => raw.split('&').filter((p) => p && !/^(qa|qa-item|qa-st|qa-review)(=|$)/.test(p)).join('&');
+    const strip = (raw) => raw.split('&').filter((p) => p && !/^(qa|qa-item|qa-st|qa-step|qa-review)(=|$)/.test(p)).join('&');
     const hash = strip(String(location.hash || '').replace(/^#/, ''));
     const search = strip(String(location.search || '').replace(/^\?/, ''));
     const next = `${location.origin}${location.pathname}${search ? `?${search}` : ''}${hash ? `#${hash}` : ''}`;
@@ -2734,7 +2899,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         const spec = await decodeSpec(payload);
         // 다른 주소에서 같은 창으로 넘어올 때 실어 온 체크·말 — 못 읽어도 대시보드에 저장된 것으로 이어진다
         const carried = /^[01]\./.test(param.st) ? await decodeSpec(param.st).catch(() => null) : null;
-        api.open(spec, { url: location.href.split('#')[0], start: param.item, src: payload, carried });
+        api.open(spec, { url: location.href.split('#')[0], start: param.item, src: payload, carried, step: param.step });
       } catch (e) {
         flash('검수 링크를 읽지 못했어요. 링크가 끝까지 복사됐는지, 방금 만든 회차면 1분 뒤 새로고침해 주세요');
       }
