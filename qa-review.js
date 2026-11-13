@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.0.0';
+  const VERSION = '2.1.0';
   const SCRIPT_URL = 'https://honest-family.github.io/qa-review-kit/qa-review.js';
   const me = document.currentScript;
   const boot = (me && me.dataset && me.dataset.boot) || '';
@@ -31,7 +31,7 @@
   const LAST = 'qa-review-last';
   const NAME = 'qa-review-name';
   const ON = 'qa-review-on';
-  const TIP = 'qa-review-tip';
+  const TIP = 'qa-review-tip2';
   const HASH = 'qa-review=';
   const PARAM = 'qa';
   const ITEM_PARAM = 'qa-item';
@@ -39,7 +39,11 @@
   const SPLIT_MIN = 1280;
   const STATUS = { todo: '미검수', needs: '추가 검토', done: '검수완료' };
   const FILTERS = [['left', '남은 것'], ['needs', '추가 검토'], ['done', '검수완료'], ['all', '전체']];
-  const TABS = [['original', '원본 내용'], ['actions', '조치 내용'], ['scenario', '검수 시나리오']];
+  const TABS = [['actions', '요청별 조치'], ['scenario', '검수항목'], ['original', '고객 원문']];
+  // 2.1.0 (2026-11-13) — 검수판을 대시보드에 붙였다: 체크 저장 · [AI에게 넘기기]가 이슈 추가요청으로 바로 등록 · 모두 검수완료면 고객 링크
+  const SEND = '__send';
+  const DEFAULT_API = 'https://api.dashboard.honest-family.com/api';
+  const ACTIVE = { waiting: 1, running: 1, question: 1 };
   const KIND = {
     a: '링크', button: '버튼', input: '입력칸', textarea: '입력칸', select: '선택칸', label: '글자', summary: '펼침 단추',
     img: '그림', svg: '그림', canvas: '그림', video: '영상', h1: '제목', h2: '제목', h3: '제목', h4: '제목', h5: '제목', h6: '제목',
@@ -294,6 +298,29 @@
     return `1.${toBase64Url(await through(bytes, new CompressionStream('deflate-raw')))}`;
   };
 
+  const normalizeLog = (raw) => {
+    if (!raw || typeof raw !== 'object') return null;
+    const entries = toList(raw.entries)
+      .map((e) => (typeof e === 'string' ? { title: e } : Object.assign({}, e)))
+      .map((e) => ({
+        title: String(e.title || '').trim(),
+        lines: toList(e.lines).map(String).filter((x) => x.trim()),
+        links: toList(e.links).filter((l) => l && /^https?:\/\//i.test(String(l.url || ''))).map((l) => ({ url: String(l.url), label: String(l.label || '바로가기') })),
+        items: toList(e.items).map(String),
+      }))
+      .filter((e) => e.title);
+    if (!entries.length) return null;
+    return {
+      product: String(raw.product || ''),
+      title: String(raw.title || '업데이트 일지'),
+      version: String(raw.version || ''),
+      date: String(raw.date || ''),
+      entries,
+      remain: toList(raw.remain).map(String).filter((x) => x.trim()),
+      revision: Number(raw.revision) || 1,
+      reply: String(raw.reply || ''),
+    };
+  };
   const normalize = (raw) => {
     const spec = Object.assign({}, raw);
     spec.id = String(spec.id || 'review');
@@ -306,6 +333,9 @@
     spec.offscreen = toList(spec.offscreen);
     spec.regression = toList(spec.regression);
     spec.hide = toList(spec.hide);
+    spec.message = String(spec.message || '').trim();
+    spec.board = spec.board && spec.board.key ? { key: String(spec.board.key), api: String(spec.board.api || DEFAULT_API).replace(/\/+$/, '') } : null;
+    spec.log = normalizeLog(spec.log);
     spec.items = toList(spec.items).map((item, i) => {
       const steps = toList(item.steps).map((step) => {
         const s = typeof step === 'string' ? { text: step } : Object.assign({}, step);
@@ -321,6 +351,13 @@
         revision: Number(item.revision) || 1,
       });
     });
+    if (spec.log && !spec.items.some((it) => it.kind === 'send')) {
+      // 고객에게 보낼 글(업데이트 일지·보낼 말)도 마지막 검수항목으로 확인받는다 — 여기 댓글이 오면 AI가 글을 고친다
+      spec.items.push({
+        id: SEND, no: String(spec.items.length + 1), kind: 'send', title: '고객에게 보낼 업데이트 일지·메시지',
+        url: '', steps: [], revision: Number(spec.log.revision) || 1, reply: spec.log.reply || '',
+      });
+    }
     return spec;
   };
   const merge = (spec, old) => {
@@ -328,7 +365,7 @@
     const state = {
       cur: (old && old.cur) || '',
       filter: (old && old.filter) || 'left',
-      tab: (old && old.tab) || 'original',
+      tab: (old && old.tab) || 'actions',
       fold: Object.assign({}, old && old.fold),
       view: (old && old.view) || 'pc',
       lastUrl: (old && old.lastUrl) || '',
@@ -343,8 +380,9 @@
       const s = Object.assign({ comments: [] }, p);
       delete s.gone;
       if (item.revision > (s.rev || 1)) {
-        if (s.status !== 'todo' || item.reply) {
-          s.comments = s.comments.concat([{ id: uid(), sys: true, by: 'AI', at: Date.now(), round: spec.round, text: item.reply || `${spec.round}회차에 고쳤어요. 다시 확인해 주세요` }]);
+        const sid = `sys-${item.id}-${item.revision}`;
+        if ((s.status !== 'todo' || item.reply) && !s.comments.some((cm) => cm.id === sid)) {
+          s.comments = s.comments.concat([{ id: sid, sys: true, by: 'AI', at: Date.now(), round: spec.round, text: item.reply || `${spec.round}회차에 고쳤어요. 다시 확인해 주세요` }]);
         }
         s.status = 'todo';
         s.rev = item.revision;
@@ -357,6 +395,26 @@
       if (!state.items[id]) state.items[id] = Object.assign({}, prev[id], { gone: true });
     });
     return state;
+  };
+  // 서버(대시보드)에 저장된 체크와 이 브라우저 체크 합치기 — 회차가 높은 쪽, 같으면 나중에 누른 쪽. 댓글은 모두 모으고 지운 것은 뺀다.
+  const virgin = (e) => !e || (!(e.at > 0) && !(e.comments && e.comments.length) && !(e.del && e.del.length));
+  const sortComments = (list) => list.slice().sort((a, b) => ((a.round || 0) - (b.round || 0)) || ((b.sys ? 1 : 0) - (a.sys ? 1 : 0)) || ((a.at || 0) - (b.at || 0)));
+  const pickEntry = (a, b) => {
+    if (virgin(b)) return a || b;
+    if (virgin(a)) return Object.assign({}, b);
+    const ra = a.rev || 1;
+    const rb = b.rev || 1;
+    const win = ra !== rb ? (ra > rb ? a : b) : ((a.at || 0) >= (b.at || 0) ? a : b);
+    const del = Array.from(new Set([].concat(a.del || [], b.del || [])));
+    const byId = new Map();
+    [].concat(a.comments || [], b.comments || []).forEach((c) => {
+      if (c && c.id && !byId.has(c.id)) byId.set(c.id, c);
+    });
+    const comments = sortComments(Array.from(byId.values()).filter((c) => !del.includes(c.id)));
+    const out = Object.assign({}, win, { comments });
+    if (del.length) out.del = del;
+    else delete out.del;
+    return out;
   };
   const freshComments = (entry) => {
     const list = (entry && entry.comments) || [];
@@ -441,7 +499,7 @@ svg{display:block}
 .tab.on{background:#111827;color:#fff}
 .tab i{font-style:normal;margin-left:4px;opacity:.7}
 .body{flex:1;min-height:0;overflow:auto;padding:12px 14px 14px;overscroll-behavior:contain}
-.body.more,.nb.more{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent)}
+.body.fadeout,.nb.fadeout{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent)}
 details.prep{margin:0 0 10px;background:#f9fafb;border:1px solid #eef0f4;border-radius:10px;padding:7px 10px}
 details.prep summary{cursor:pointer;font-size:12.5px;color:#4b5563;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 details.prep summary b{color:#111827;margin-right:6px}
@@ -585,6 +643,8 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
 .pickhint{position:absolute;left:50%;top:14px;transform:translateX(-50%);background:#111827;color:#fff;border-radius:999px;padding:8px 15px;font-size:13px;font-weight:700;pointer-events:none;white-space:nowrap;box-shadow:0 10px 30px -10px rgba(0,0,0,.5)}
 .toast{position:absolute;left:50%;bottom:24px;transform:translateX(-50%) translateY(8px);opacity:0;background:#111827;color:#fff;border-radius:999px;padding:9px 16px;font-size:13.5px;font-weight:600;white-space:nowrap;max-width:calc(100vw - 24px);overflow:hidden;text-overflow:ellipsis;transition:opacity .2s,transform .2s;pointer-events:none}
 .toast.on{opacity:1;transform:translateX(-50%)}
+.mbg{z-index:5}
+.toast{z-index:6}
 .mbg{position:absolute;inset:0;background:rgba(15,23,42,.45);pointer-events:auto;display:flex;align-items:flex-start;justify-content:center;padding:12vh 12px 12px}
 .modal{width:min(460px,100%);background:#fff;border-radius:16px;padding:18px;box-shadow:0 22px 50px -14px rgba(15,23,42,.45)}
 .modal h3{margin:0 0 6px;font-size:16px;font-weight:800}
@@ -598,6 +658,35 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
 .tip::after{content:"";position:absolute;right:-7px;bottom:18px;border-style:solid;border-width:7px 0 7px 7px;border-color:transparent transparent transparent #111827}
 .tip b{color:#fca5a5}
 .tip button{display:block;margin-top:8px;font-weight:800;color:#fca5a5}
+.flow{flex:none;display:flex;gap:4px;margin:0;padding:8px 10px 0;list-style:none}
+.flow li{flex:1;min-width:0;margin:0;font-size:12px}
+.flow button{display:flex;align-items:center;gap:5px;width:100%;padding:5px 7px;border-radius:9px;font-size:12px;font-weight:700;color:#6b7280;background:#f3f4f6;white-space:nowrap;overflow:hidden}
+.flow button:hover{background:#e9ebef}
+.flow .n{flex:none;width:17px;height:17px;border-radius:50%;background:#c4c9d2;color:#fff;font-size:10.5px;font-weight:800;display:inline-flex;align-items:center;justify-content:center}
+.flow b{font-weight:800;margin-left:1px}
+.flow .on button{background:#fef2f2;color:#b91c1c}
+.flow .on .n{background:#dc2626}
+.flow .ok button{background:#f0fdf4;color:#15803d}
+.flow .ok .n{background:#16a34a}
+.flow .live .n{animation:qp 1.2s ease-in-out infinite}
+.top.fold .flow{display:none}
+.ft .sum b{color:#111827;font-weight:800}
+.ft .sum.live::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:#dc2626;margin-right:6px;vertical-align:1px;animation:qp 1.2s ease-in-out infinite}
+@keyframes qp{50%{opacity:.25}}
+.lnk{color:#2563eb;font-weight:700}
+.lnk:hover{text-decoration:underline}
+.msgp{background:#f6f7f9;border-radius:10px;padding:9px 11px;font-size:13px;line-height:1.62;white-space:pre-wrap;margin:0 0 10px;color:#1f2937}
+.lgp{border:1px solid #e5e8eb;border-radius:12px;padding:10px 12px;margin:0 0 10px;background:#fff}
+.lgp .le+.le{margin-top:9px;padding-top:9px;border-top:1px solid #f2f4f6}
+.lgp .le b{display:block;font-size:13.5px;font-weight:800;color:#191f28;line-height:1.45}
+.lgp .le ul{margin-top:3px}
+.lgp .le a.ln{display:inline-block;margin-top:3px;font-size:12px;font-weight:700;color:#3182f6}
+.lgp .le.rest b{color:#6b7280;font-size:12.5px}
+.share{background:#f0fdf4;color:#166534;border-radius:10px;padding:9px 11px;margin:0 0 10px;font-size:13px;font-weight:700;line-height:1.5}
+.share .row2,.allset .row2{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.share .mu{display:block;font-weight:500;color:#4b5563;margin-top:2px}
+.modal textarea.short{height:170px}
+.mr{flex-wrap:wrap}
 @media (max-width:640px){
 .top{left:0;right:0;top:auto;bottom:0;width:auto;max-height:86vh;border-radius:16px 16px 0 0;z-index:3}
 .top.fold{display:none}
@@ -610,7 +699,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
 .tip::after{display:none}
 .nf{grid-template-columns:1fr 1.4fr 1fr}
 }
-@media (prefers-reduced-motion:reduce){.card,.mk.flash{animation:none}.toast,.fold-ic{transition:none}}
+@media (prefers-reduced-motion:reduce){.card,.mk.flash,.flow .live .n,.ft .sum.live::before{animation:none}.toast,.fold-ic{transition:none}}
 `;
 
   class Shell {
@@ -719,6 +808,16 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.markRects = [];
       this.modalDone = null;
       this.loadingSince = 0;
+      this.board = null;
+      this.synced = false;
+      this.stale = false;
+      this.pushedSig = '';
+      this.src = '';
+      this.onVisible = () => {
+        if (document.hidden) return;
+        this.polledAt = 0;
+        this.poll();
+      };
       this.onScroll = () => this.schedule();
       this.onStorage = (e) => {
         if (!this.spec || e.key !== KEY + this.spec.id || !e.newValue) return;
@@ -747,21 +846,22 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       shadow.innerHTML = `<style>${CSS_TEXT}</style>
 <div class="root">
   <div class="marks"></div>
-  <section class="card top" role="dialog" aria-label="검수판">
+  <section class="card top" role="dialog" aria-label="검수">
     <header class="hd" data-act="fold-top">
-      <span class="brand">검수판</span><span class="t"></span><span class="rd" hidden></span>
+      <span class="brand">검수</span><span class="t"></span><span class="rd" hidden></span>
       <button class="ib" type="button" data-act="split" title="화면 위에 겹쳐 보기" aria-label="나란히 보기 또는 겹쳐 보기">${ICON.split}</button>
       <button class="ib" type="button" data-act="mobile" title="휴대폰 폭(390px)으로 보기" aria-label="휴대폰 폭으로 보기">${ICON.phone}</button>
       <button class="ib fold-ic" type="button" data-act="fold-top" title="접기·펼치기" aria-label="접기 또는 펼치기">${ICON.chevron}</button>
-      <button class="ib" type="button" data-act="close" title="검수판 닫기" aria-label="검수판 닫기">${ICON.close}</button>
+      <button class="ib" type="button" data-act="close" title="검수 닫기" aria-label="검수 닫기">${ICON.close}</button>
     </header>
+    <ol class="flow" hidden></ol>
     <nav class="tabs" role="tablist"></nav>
     <div class="body"></div>
-    <footer class="ft"><span class="sum"></span><button class="btn red sm" type="button" data-act="export">AI에게 넘기기</button></footer>
+    <footer class="ft"><span class="sum"></span><button class="btn red sm fa" type="button" data-act="export">AI에게 넘기기</button></footer>
   </section>
-  <section class="card nav" role="dialog" aria-label="검수 항목">
+  <section class="card nav" role="dialog" aria-label="지금 볼 검수항목">
     <header class="nh" data-act="fold-nav">
-      <button class="ov" type="button" data-act="overview">검수판</button><span class="no"></span><span class="pill"></span><span class="left"></span><span class="nt"></span><span class="sp"></span>
+      <button class="ov" type="button" data-act="overview">전체</button><span class="no"></span><span class="pill"></span><span class="left"></span><span class="nt"></span><span class="sp"></span>
       <button class="ib fold-ic" type="button" data-act="fold-nav" title="접기·펼치기" aria-label="접기 또는 펼치기">${ICON.chevron}</button>
     </header>
     <div class="nb"></div>
@@ -781,7 +881,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.shadow = shadow;
       this.ui = {
         root: $('.root'), marks: $('.marks'), top: $('.top'), nav: $('.nav'), title: $('.hd .t'), round: $('.hd .rd'), split: $('[data-act="split"]'),
-        tabs: $('.tabs'), body: $('.body'), sum: $('.ft .sum'), no: $('.nh .no'), pill: $('.nh .pill'), left: $('.nh .left'), nt: $('.nh .nt'),
+        tabs: $('.tabs'), body: $('.body'), sum: $('.ft .sum'), fa: $('.ft .fa'), flow: $('.flow'), no: $('.nh .no'), pill: $('.nh .pill'), left: $('.nh .left'), nt: $('.nh .nt'),
         nb: $('.nb'), prev: $('[data-act="prev"]'), done: $('.nf [data-act="done"]'), next: $('[data-act="next"]'), mobile: $('[data-act="mobile"]'),
         pick: $('.pick'), pickbox: $('.pickbox'), picktag: $('.picktag'), tip: $('.tip'), toast: $('.toast'), mbg: $('.mbg'), modal: $('.modal'),
       };
@@ -816,14 +916,25 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       addEventListener('storage', this.onStorage);
       if (!this.timer) this.timer = setInterval(() => this.tick(), 700);
       if (!this.drawTimer) this.drawTimer = setInterval(() => this.draw(), 120);
+      if (!this.pollTimer) this.pollTimer = setInterval(() => this.poll(), 4000);
+      document.addEventListener('visibilitychange', this.onVisible);
     }
 
     load(raw, opts) {
       const spec = normalize(raw);
       const saved = local.get(KEY + spec.id);
+      const sameBoard = Boolean(this.spec && this.spec.board && spec.board && this.spec.board.key === spec.board.key);
       this.raw = raw;
       this.spec = spec;
       this.state = merge(spec, saved && saved.state);
+      this.src = opts.src || (saved && saved.src) || (sameBoard ? this.src : '') || '';
+      if (!sameBoard) {
+        this.board = null;
+        this.boardSig = '';
+      }
+      this.synced = false;
+      this.stale = false;
+      this.pushedSig = '';
       if (this.state.fold.top == null) this.state.fold.top = this.isPhone();
       const start = opts.start && this.item(opts.start);
       if (start) this.state.cur = start.id;
@@ -843,6 +954,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.save();
       this.mount();
       this.itemChanged();
+      if (spec.board) this.serverLoad(true);
       if (!local.text(TIP)) setTimeout(() => this.showTip(), 500);
       return this.summary();
     }
@@ -851,7 +963,8 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       if (!this.spec) return;
       const href = this.href();
       if (href && sameOrigin(href)) this.state.lastUrl = href;
-      local.set(KEY + this.spec.id, { v: 1, spec: this.raw, state: this.state, savedAt: Date.now() });
+      local.set(KEY + this.spec.id, { v: 1, spec: this.raw, state: this.state, savedAt: Date.now(), src: this.src || '' });
+      this.pushSoon();
     }
 
     destroy(opts) {
@@ -859,12 +972,16 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.timer = 0;
       clearInterval(this.drawTimer);
       this.drawTimer = 0;
+      clearInterval(this.pollTimer);
+      this.pollTimer = 0;
+      document.removeEventListener('visibilitychange', this.onVisible);
       cancelAnimationFrame(this.raf);
       document.removeEventListener('keydown', this.onKey, true);
       removeEventListener('resize', this.onResize);
       removeEventListener('scroll', this.onScroll, true);
       removeEventListener('storage', this.onStorage);
       this.save();
+      this.pushNow();
       const keep = Boolean(opts && opts.keep);
       if (!keep) local.put(ON, null);
       session.put(ON, null);
@@ -1035,7 +1152,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.ui.round.hidden = s.round < 2;
       this.ui.round.textContent = `${s.round}회차`;
       const tab = this.state.tab;
-      const tabCount = { original: s.original.length, actions: s.actions.length, scenario: c.all };
+      const tabCount = { original: s.original.length, actions: s.log ? s.log.entries.length : s.actions.length, scenario: c.all };
       this.ui.tabs.innerHTML = TABS.map(([key, label]) => `<button class="tab${key === tab ? ' on' : ''}" type="button" role="tab" aria-selected="${key === tab}" data-act="tab" data-tab="${key}">${label}<i>${tabCount[key] || ''}</i></button>`).join('');
       const keep = this.ui.body.scrollTop;
       this.ui.body.innerHTML = tab === 'actions' ? this.actionsHtml() : tab === 'scenario' ? this.scenarioHtml() : this.originalHtml();
@@ -1047,10 +1164,8 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         if (b.height && (r.top < b.top || r.bottom > b.bottom)) this.ui.body.scrollTop += r.top - b.top - (b.height - r.height) / 2;
       }
       this.fade(this.ui.body);
-      const comments = this.spec.items.reduce((n, it) => n + freshComments(this.entry(it.id)).length, 0);
-      this.ui.sum.textContent = `검수완료 ${c.done} / ${c.all}`;
-      const exportBtn = this.ui.top.querySelector('.ft [data-act="export"]');
-      if (exportBtn) exportBtn.textContent = comments ? `AI에게 넘기기 · 댓글 ${comments}` : 'AI에게 넘기기';
+      this.renderFlow();
+      this.renderFoot();
     }
 
     originalHtml() {
@@ -1064,20 +1179,32 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       }).join('');
     }
 
+    refLinks(ids) {
+      const refs = toList(ids).map((id) => this.item(String(id))).filter(Boolean);
+      if (!refs.length) return '';
+      return `<div class="refs"><span>검수항목</span>${refs.map((it) => {
+        const st = this.statusOf(it.id);
+        return `<button class="ref ${st}" type="button" data-act="go" data-id="${esc(it.id)}" title="${esc(STATUS[st])}">${esc(it.no)}번${st === 'done' ? ' ✓' : st === 'needs' ? ' !' : ''}</button>`;
+      }).join('')}<span>→</span></div>`;
+    }
+
     actionsHtml() {
       const s = this.spec;
       const summary = s.summary ? `<p class="summary">${inline(s.summary)}</p>` : '';
-      if (!s.actions.length) return `${summary}<p class="empty">조치 내용이 없어요.</p>`;
-      return summary + s.actions.map((a) => {
+      const detail = (list) => list.map((a) => {
         const head = a.title || a.no ? `<h4>${a.no ? `<b>${esc(a.no)})</b> ` : ''}${inline(a.title || '')}</h4>` : '';
-        const refs = a.refs.map((id) => this.item(String(id))).filter(Boolean);
-        const refLinks = refs.map((it) => {
-          const st = this.statusOf(it.id);
-          return `<button class="ref ${st}" type="button" data-act="go" data-id="${esc(it.id)}" title="${esc(STATUS[st])}">${esc(it.no)}번${st === 'done' ? ' ✓' : st === 'needs' ? ' !' : ''}</button>`;
-        }).join('');
-        return `<article class="act">${head}${a.items.length ? `<ul>${a.items.map((x) => `<li>${inline(x)}</li>`).join('')}</ul>` : ''}`
-          + `${refs.length ? `<div class="refs"><span>검수 항목</span>${refLinks}<span>→</span></div>` : ''}</article>`;
+        return `<article class="act">${head}${a.items.length ? `<ul>${a.items.map((x) => `<li>${inline(x)}</li>`).join('')}</ul>` : ''}${this.refLinks(a.refs)}</article>`;
       }).join('');
+      if (s.log) {
+        // 고객 요청 한 줄마다 한 일 — 고객에게 가는 업데이트 일지와 같은 글이다
+        const entries = s.log.entries.map((e, i) => `<article class="act"><h4><b>${i + 1})</b> ${esc(e.title)}</h4>`
+          + `${e.lines.length ? `<ul>${e.lines.map((x) => `<li>${inline(x)}</li>`).join('')}</ul>` : ''}${this.refLinks(e.items)}</article>`).join('');
+        const remain = s.log.remain.length ? `<article class="act"><h4>남은 부분</h4><ul>${s.log.remain.map((x) => `<li>${inline(x)}</li>`).join('')}</ul></article>` : '';
+        const more = s.actions.length ? `<details class="sec" style="margin-top:13px"><summary>AI가 한 작업 자세히 ${s.actions.length}</summary>${detail(s.actions)}</details>` : '';
+        return summary + entries + remain + more;
+      }
+      if (!s.actions.length) return `${summary}<p class="empty">조치 내용이 없어요.</p>`;
+      return summary + detail(s.actions);
     }
 
     dot(id) {
@@ -1095,7 +1222,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       const empty = { left: '남은 항목이 없어요. 모두 검수했어요.', needs: '추가 검토로 남긴 항목이 없어요.', done: '아직 검수완료한 항목이 없어요.', all: '검수 항목이 없어요.' }[f];
       const list = rows.length ? `<div class="rows">${rows.map((it) => {
         const n = freshComments(this.entry(it.id)).length;
-        const where = it.url ? shortUrl(it.url) : '화면 밖 확인';
+        const where = it.url ? shortUrl(it.url) : it.kind === 'send' ? '고객에게 보낼 글' : '화면 밖 확인';
         const meta = [it.env, where.length > 34 ? `${where.slice(0, 33)}…` : where, n ? `댓글 ${n}` : ''].filter(Boolean).join(' · ');
         return `<button class="row${it.id === this.state.cur ? ' cur' : ''}" type="button" data-act="go" data-id="${esc(it.id)}">${this.dot(it.id)}<span class="rt"><b>${esc(it.no)}.</b>${inline(it.title)}<span class="rm">${esc(meta)}</span></span></button>`;
       }).join('')}</div>` : `<p class="empty">${empty}</p>`;
@@ -1113,7 +1240,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       const keep = this.navReset ? 0 : this.ui.nb.scrollTop;
       this.navReset = false;
       if (!it) {
-        this.ui.no.textContent = '검수 항목';
+        this.ui.no.textContent = '검수항목';
         this.ui.pill.className = 'pill';
         this.ui.pill.textContent = '없음';
         this.ui.left.textContent = '';
@@ -1127,7 +1254,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       }
       const st = this.statusOf(it.id);
       const idx = this.spec.items.indexOf(it) + 1;
-      this.ui.no.textContent = `항목 ${idx} / ${c.all}`;
+      this.ui.no.textContent = `검수항목 ${idx} / ${c.all}`;
       this.ui.pill.className = `pill ${st}`;
       this.ui.pill.textContent = STATUS[st];
       this.ui.left.textContent = `남은 것 ${c.left}`;
@@ -1135,20 +1262,21 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       const sameSite = !it.url || (sameOrigin(it.url) && !it.outside);
       const where = it.url
         ? `${link(it.url, true)}${sameSite ? `<button class="tiny" type="button" data-act="reload" title="이 항목 주소를 처음부터 다시 열어요">${ICON.reload}처음부터</button>` : ''}`
-        : '<span>화면 밖 확인</span>';
+        : `<span>${it.kind === 'send' ? '고객에게 보낼 글 · 화면 밖 확인' : '화면 밖 확인'}</span>`;
       const meta = `<div class="meta">${where}${it.env ? `<span>${inline(it.env)}</span>` : ''}${it.account ? `<span>${inline(it.account)}</span>` : ''}</div>`;
-      const done = c.all > 0 && c.left === 0
-        ? '<div class="allset">모든 항목을 검수완료했어요.<br><button class="btn red sm" type="button" data-act="export">AI에게 넘기기</button></div>'
-        : c.todo === 0 && c.needs > 0
-          ? `<div class="allset">다 봤어요. 추가 검토 ${c.needs}개를 AI에게 넘겨 주세요.<br><button class="btn red sm" type="button" data-act="export">AI에게 넘기기</button></div>`
-          : '';
+      const done = this.allsetHtml(c);
+      const carry = Boolean(this.src && !it.outside);
       const crossText = it.outside
         ? '결제창처럼 바깥 창이 열리는 항목이라 새 창에서 확인해 주세요. 확인한 뒤 여기로 돌아와 검수완료나 댓글을 남기면 돼요.'
-        : '다른 주소의 화면이라 이 창에서는 빨간 표시를 붙일 수 없어요. 새 창에서 확인한 뒤 돌아와 검수완료나 댓글을 남겨 주세요.';
+        : carry
+          ? `다른 주소(${esc(shortUrl(it.url).split('/')[0])})의 화면이에요. 새 창에서 열면 거기서도 이 검수가 이어져요${this.spec.board ? '(체크는 함께 저장돼요)' : ''}.`
+          : '다른 주소의 화면이라 이 창에서는 빨간 표시를 붙일 수 없어요. 새 창에서 확인한 뒤 돌아와 검수완료나 댓글을 남겨 주세요.';
       const cross = it.url && !sameSite
-        ? `<div class="warn">${crossText}<br><button class="btn dark sm" type="button" data-act="open-out">${ICON.out}새 창에서 열기</button></div>`
+        ? `<div class="warn">${crossText}<br><button class="btn dark sm" type="button" data-act="open-out">${ICON.out}${carry ? '새 창에서 이어서 검수' : '새 창에서 열기'}</button></div>`
         : '';
-      const situation = it.situation ? `<p class="sit">${inline(it.situation)}</p>` : '';
+      const situation = it.kind === 'send'
+        ? `<p class="sit">고객이 받을 글이에요. 이대로 보내도 되면 검수완료, 고칠 곳이 있으면 댓글을 남겨 주세요.</p>${this.sendHtml()}`
+        : it.situation ? `<p class="sit">${inline(it.situation)}</p>` : '';
       const anyMark = it.steps.some((step) => step.marks.length) && sameSite;
       const legend = anyMark ? '<div class="legend"><span><i class="on"></i>화면에 빨간 표시 있음</span><span><i></i>지금 화면에 없음</span></div>' : '';
       const steps = it.steps.length ? `${legend}<ol class="steps">${it.steps.map((step, k) => {
@@ -1288,7 +1416,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
     }
 
     fade(el) {
-      el.classList.toggle('more', el.scrollTop + el.clientHeight < el.scrollHeight - 2);
+      el.classList.toggle('fadeout', el.scrollTop + el.clientHeight < el.scrollHeight - 2);
     }
 
     covered(el, rect) {
@@ -1448,7 +1576,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.autoFolded = true;
       this.state.fold.top = true;
       this.ui.top.classList.add('fold');
-      this.toast('빨간 표시를 가려서 검수판을 접었어요. 머리줄을 누르면 펼쳐져요');
+      this.toast('빨간 표시를 가려서 위 카드를 접었어요. 머리줄을 누르면 펼쳐져요');
     }
 
     autoScroll() {
@@ -1509,7 +1637,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         this.applyView();
         this.save();
       } else if (act === 'close') {
-        this.confirm('검수판을 닫을까요?', '체크와 댓글은 이 브라우저에 남아 있어요. 검수 링크를 다시 열면 이어서 볼 수 있어요.', '닫기', () => this.destroy());
+        this.confirm('검수를 닫을까요?', this.spec.board ? '체크와 댓글은 대시보드에도 저장돼 있어요. 검수 링크를 다시 열면 이어서 볼 수 있어요.' : '체크와 댓글은 이 브라우저에 남아 있어요. 검수 링크를 다시 열면 이어서 볼 수 있어요.', '닫기', () => this.destroy());
       } else if (act === 'tab') {
         this.state.tab = el.dataset.tab;
         this.ui.body.scrollTop = 0;
@@ -1534,12 +1662,48 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         this.toggleDone();
       } else if (act === 'export') {
         this.exportModal();
+      } else if (act === 'handoff') {
+        this.sendToAi();
+      } else if (act === 'next-round') {
+        this.openRound();
+      } else if (act === 'open-issue') {
+        const url = this.board && this.board.issue && this.board.issue.url;
+        if (url) window.open(url, '_blank', 'noopener');
+      } else if (act === 'share') {
+        this.showShare();
+      } else if (act === 'copy-share') {
+        this.copy(this.shareText(), '복사했어요. 고객 카톡·문자에 그대로 붙여 넣으면 돼요');
+      } else if (act === 'copy-link') {
+        if (this.board && this.board.share_url) this.copy(this.board.share_url, '링크를 복사했어요');
+      } else if (act === 'preview') {
+        if (this.board && this.board.share_url) window.open(`${this.board.share_url}?preview=1`, '_blank', 'noopener');
+      } else if (act === 'next-left') {
+        const list = this.spec.items;
+        const idx = list.findIndex((x) => x.id === this.state.cur);
+        const order = list.slice(idx + 1).concat(list.slice(0, idx + 1));
+        const n = order.find((x) => this.statusOf(x.id) === 'todo') || order.find((x) => this.statusOf(x.id) !== 'done');
+        if (n) this.go(n.id);
+      } else if (act === 'flow-1') {
+        this.state.tab = 'scenario';
+        this.state.filter = 'left';
+        this.state.fold.top = false;
+        this.applyView();
+        this.save();
+        this.renderAll();
+      } else if (act === 'flow-2') {
+        const b = this.board || {};
+        if (b.round > this.spec.round && b.link) this.openRound();
+        else if (this.phase() && b.issue && b.issue.url) window.open(b.issue.url, '_blank', 'noopener');
+        else if (this.counts().needs) this.sendToAi();
+        else this.toast('고칠 것(추가 검토)이 생기면 여기서 AI에게 넘겨요');
+      } else if (act === 'flow-3') {
+        this.showShare();
       } else if (act === 'reload') {
         const it = this.current();
         if (it) this.go(it.id, { reload: true });
       } else if (act === 'open-out') {
         const it = this.current();
-        if (it && it.url) window.open(it.url, '_blank', 'noopener');
+        if (it && it.url) window.open(this.carry(it), '_blank', 'noopener');
       } else if (act === 'step') {
         this.focusStep(Number(el.dataset.step));
       } else if (act === 'copy') {
@@ -1673,6 +1837,8 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.confirm('이 댓글을 지울까요?', '지운 댓글은 AI에게 넘기는 글에서도 빠져요.', '지우기', () => {
         const entry = this.entry(it.id);
         entry.comments = entry.comments.filter((cm) => cm.id !== cid);
+        entry.del = Array.from(new Set([].concat(entry.del || [], [cid])));
+        entry.at = Date.now();
         if (entry.status === 'needs' && !freshComments(entry).length) entry.status = 'todo';
         this.targetsFor = '';
         this.save();
@@ -1721,10 +1887,13 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.modalDone = done;
     }
 
-    exportModal() {
+    exportModal(reason) {
       const text = buildExport(this.spec, this.state, this.name());
       const c = this.counts();
-      this.modal(`<h3>AI에게 넘기기</h3><p>아래 글을 복사해서 이슈 댓글에 붙여 넣고 "댓글 단 거 다 고쳐줘"라고 적어 주세요. 추가 검토 ${c.needs}개를 고치고, 검수완료 ${c.done}개는 다음 검수판에서 빠져요.</p>`
+      const lead = reason
+        ? `${esc(reason)} 아래 글을 복사해서 대시보드 이슈 댓글에 붙여 넣어 주세요.`
+        : `아래 글을 복사해서 이슈 댓글에 붙여 넣고 "댓글 단 거 다 고쳐줘"라고 적어 주세요. 추가 검토 ${c.needs}개를 고치고, 검수완료 ${c.done}개는 다음 회차에서 빠져요.`;
+      this.modal(`<h3>AI에게 넘기기</h3><p>${lead}</p>`
         + `<textarea readonly>${esc(text)}</textarea><div class="mr"><button class="btn ghost sm" type="button" data-act="modal-cancel">닫기</button><button class="btn red sm" type="button" data-act="modal-copy">복사하기</button></div>`);
       const ta = this.ui.modal.querySelector('textarea');
       if (ta) ta.addEventListener('focus', () => ta.select());
@@ -1871,9 +2040,329 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
     showTip() {
       if (!this.spec || local.text(TIP)) return;
       const nav = this.ui.nav.getBoundingClientRect();
-      this.ui.tip.innerHTML = '오른쪽 아래 <b>다음 ›</b>을 누르면 다음 검수 항목으로 넘어가고 빨간 표시가 따라가요. 다 봤으면 <b>검수완료</b>, 고칠 게 있으면 댓글을 남겨 주세요. 끝나면 오른쪽 위 빨간 상자의 <b>AI에게 넘기기</b>로 한 번에 보내요.<button type="button" data-act="tip-ok">알겠어요</button>';
+      // 카드 자리는 화면마다 다르다 — 폰은 아래, 왼쪽 배치면 왼쪽 아래
+      const phone = this.isPhone();
+      const where = phone ? '아래' : this.ui.nav.classList.contains('left') ? '왼쪽 아래' : '오른쪽 아래';
+      const ok = '<button type="button" data-act="tip-ok">알겠어요</button>';
+      this.ui.tip.innerHTML = this.spec.board
+        ? `${where} 카드가 <b>지금 볼 검수항목</b>이에요. 빨간 표시대로 눌러 보고 맞으면 <b>검수완료</b>, 고칠 게 있으면 댓글을 남겨 주세요. ${phone ? '<b>전체</b>를 누르면' : '위 카드 맨 위'} <b>① 확인 → ② AI 수정 → ③ 고객 링크</b> 순서${phone ? '가 보여요' : '로 끝나요'}.${ok}`
+        : `${where} <b>다음 ›</b>을 누르면 다음 검수항목으로 넘어가고 빨간 표시가 따라가요. 다 봤으면 <b>검수완료</b>, 고칠 게 있으면 댓글을 남겨 주세요. 끝나면 ${phone ? '<b>전체</b>를 눌러' : '위 카드의'} <b>AI에게 넘기기</b>로 한 번에 보내요.${ok}`;
       if (!this.isPhone()) this.ui.tip.style.bottom = `${Math.max(16, innerHeight - nav.bottom + 8)}px`;
       this.ui.tip.hidden = false;
+    }
+
+    // ───────── 대시보드 연결 (2.1.0) ─────────
+
+    async call(method, path, body) {
+      const b = this.spec && this.spec.board;
+      if (!b) return { ok: false, status: 0, data: null, message: '' };
+      const payload = body ? JSON.stringify(body) : undefined;
+      try {
+        const res = await fetch(`${b.api}/public/qa/${encodeURIComponent(b.key)}${path}`, {
+          method,
+          cache: 'no-store',
+          headers: payload ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' },
+          body: payload,
+          keepalive: Boolean(payload && payload.length < 60000),
+        });
+        const json = await res.json().catch(() => null);
+        return { ok: res.ok, status: res.status, data: (json && json.data) || null, message: (json && json.message) || '' };
+      } catch (e) {
+        return { ok: false, status: 0, data: null, message: '' };
+      }
+    }
+
+    async serverLoad(first) {
+      if (!this.spec || !this.spec.board || this.loadingBoard) return;
+      const id = this.spec.id;
+      const round = this.spec.round;
+      this.loadingBoard = true;
+      const res = await this.call('GET', '');
+      this.loadingBoard = false;
+      this.polledAt = Date.now();
+      if (!this.spec || this.spec.id !== id || this.spec.round !== round) return;
+      if (!res.ok || !res.data) {
+        if (first && res.status === 404) this.toast('대시보드에서 이 검수를 찾지 못했어요. 체크는 이 브라우저에만 저장돼요');
+        return;
+      }
+      if (res.data.round > this.spec.round) {
+        // 새 회차가 이미 나왔다 — 옛 회차 체크로 서버를 덮지 않는다
+        this.stale = true;
+        this.setBoard(res.data);
+        return;
+      }
+      this.synced = true;
+      const remote = res.data.state && res.data.state.items;
+      if (remote && typeof remote === 'object') {
+        const before = JSON.stringify(this.state.items);
+        const combined = {};
+        new Set(Object.keys(this.state.items).concat(Object.keys(remote))).forEach((key) => {
+          combined[key] = pickEntry(this.state.items[key], remote[key]);
+        });
+        this.state.items = merge(this.spec, { items: combined }).items;
+        if (JSON.stringify(this.state.items) !== before) {
+          this.targetsFor = '';
+          this.save();
+          this.renderAll();
+        }
+      }
+      this.setBoard(res.data);
+      this.pushSoon(300);
+    }
+
+    pushSoon(delay) {
+      if (!this.synced || this.stale || !this.spec || !this.spec.board) return;
+      if (JSON.stringify(this.state.items) === this.pushedSig) return;
+      const c = this.counts();
+      clearTimeout(this.pushTimer);
+      this.pushTimer = setTimeout(() => this.pushNow(), delay != null ? delay : c.all && c.done === c.all ? 150 : 1200);
+    }
+
+    async pushNow() {
+      clearTimeout(this.pushTimer);
+      if (!this.synced || this.stale || !this.spec || !this.spec.board) return null;
+      const sig = JSON.stringify(this.state.items);
+      if (sig === this.pushedSig) return null;
+      const c = this.counts();
+      this.pushedSig = sig;
+      const res = await this.call('PUT', '/state', { state: { items: this.state.items }, round: this.spec.round, counts: { total: c.all, done: c.done, needs: c.needs } });
+      if (res.ok) {
+        this.setBoard(res.data);
+      } else if (res.status === 409 && res.data) {
+        this.stale = true;
+        this.setBoard(res.data);
+      } else if (this.pushedSig === sig) {
+        this.pushedSig = '';
+      }
+      return res;
+    }
+
+    poll() {
+      if (!this.spec || !this.spec.board || this.loadingBoard || document.hidden) return;
+      const every = this.phase() || this.sending ? 8000 : this.synced || this.stale ? 45000 : 20000;
+      if (Date.now() - (this.polledAt || 0) < every) return;
+      this.serverLoad(false);
+    }
+
+    setBoard(data) {
+      if (!data) return;
+      const prev = this.board || {};
+      const next = Object.assign({}, prev, data);
+      delete next.state;
+      this.board = next;
+      const known = prev.round != null;
+      const ph = next.handoff ? next.handoff.phase : '';
+      const before = prev.handoff ? prev.handoff.phase : '';
+      if (known && next.round > this.spec.round && next.link && !(prev.round > this.spec.round)) {
+        this.toast(`${next.round}회차 검수항목이 나왔어요`);
+      } else if (known && before && ph && ph !== before) {
+        const say = { running: 'AI가 고치기 시작했어요', question: 'AI가 물어볼 게 있어요 · 대시보드 이슈를 봐 주세요', done: 'AI가 일을 끝냈어요', failed: 'AI 작업이 멈췄어요 · 대시보드 이슈를 봐 주세요', blocked: 'AI가 착수하지 못했어요 · 대시보드 이슈를 봐 주세요' }[ph];
+        if (say) this.toast(say);
+      }
+      const sig = JSON.stringify([next.round, next.link, ph, next.share_url, next.viewed_at, next.message, next.log ? 1 : 0]);
+      if (sig !== this.boardSig) {
+        this.boardSig = sig;
+        this.renderTop();
+        this.renderNav();
+      }
+      if (known && !prev.share_url && next.share_url) setTimeout(() => this.showShare(), 450);
+    }
+
+    phase() {
+      const b = this.board;
+      const h = b && b.handoff;
+      if (!h || b.round > this.spec.round) return '';
+      return ACTIVE[h.phase] ? h.phase : '';
+    }
+
+    issueRef() {
+      const i = this.board && this.board.issue;
+      return i && i.url ? `<button class="lnk" type="button" data-act="open-issue">#${esc(i.id)}</button>` : '';
+    }
+
+    renderFlow() {
+      const f = this.ui.flow;
+      f.hidden = !this.spec.board;
+      if (f.hidden) return;
+      const c = this.counts();
+      const b = this.board || {};
+      const ph = this.phase();
+      const newer = b.round > this.spec.round && b.link;
+      const complete = c.all > 0 && c.done === c.all;
+      const one = c.todo === 0 ? 'ok' : 'on';
+      const two = complete ? 'ok' : ph ? 'on live' : newer || (c.todo === 0 && c.needs) ? 'on' : '';
+      const three = complete ? (b.share_url ? 'on' : 'on live') : '';
+      const li = (cls, n, html, act, title) => `<li class="${cls}"><button type="button" data-act="${act}" title="${esc(title)}"><span class="n">${cls === 'ok' ? '✓' : n}</span>${html}</button></li>`;
+      f.innerHTML = li(one, 1, `확인 <b>${c.done + c.needs}/${c.all}</b>`, 'flow-1', '검수항목을 하나씩 눌러 확인해요')
+        + li(two, 2, ph ? 'AI 수정 중' : newer ? `${b.round}회차 나옴` : `AI 수정${c.needs ? ` <b>${c.needs}</b>` : ''}`, 'flow-2', '고칠 것(추가 검토)을 AI에게 넘기면 대시보드에 바로 등록돼요')
+        + li(three, 3, '고객 링크', 'flow-3', '모두 검수완료하면 고객에게 보낼 링크가 나와요');
+    }
+
+    renderFoot() {
+      const c = this.counts();
+      const sum = this.ui.sum;
+      const btn = this.ui.fa;
+      const set = (html, label, act, tone, live) => {
+        sum.innerHTML = html;
+        sum.classList.toggle('live', Boolean(live));
+        btn.hidden = !label;
+        if (label) {
+          btn.textContent = label;
+          btn.dataset.act = act;
+          btn.className = `btn sm fa ${tone}`;
+        }
+      };
+      if (!this.spec.board) {
+        const comments = this.spec.items.reduce((n, it) => n + freshComments(this.entry(it.id)).length, 0);
+        set(`검수완료 <b>${c.done}</b> / ${c.all}`, comments ? `AI에게 넘기기 · 댓글 ${comments}` : 'AI에게 넘기기', 'export', 'red');
+        return;
+      }
+      const b = this.board || {};
+      const h = b.handoff;
+      if (b.round > this.spec.round && b.link) {
+        set(`${b.round}회차 검수항목이 나왔어요`, `${b.round}회차 열기`, 'next-round', 'red');
+        return;
+      }
+      const ph = this.phase();
+      const said = { waiting: '대시보드에 접수됨 · 곧 시작', running: 'AI 처리중', question: 'AI가 질문했어요', done: 'AI 처리 완료', failed: 'AI 작업 멈춤', blocked: 'AI 착수 못 함' };
+      if (ph) {
+        set(`${said[ph]} · 대시보드 ${this.issueRef()}`, '', '', '', true);
+        return;
+      }
+      if (c.all && c.done === c.all) {
+        if (b.share_url) set('모두 검수완료 · 고객 링크 준비됐어요', '고객에게 보낼 링크', 'share', 'ok');
+        else if (this.spec.log) set('모두 검수완료 · 고객 링크 만드는 중…', '', '', '');
+        else set('모두 검수완료', 'AI에게 알리기', 'handoff', 'outline');
+        return;
+      }
+      const after = h && h.phase && said[h.phase] ? `${said[h.phase]} ${this.issueRef()} · ` : '';
+      if (c.needs) {
+        set(`${after}남은 ${c.todo} · 고칠 것 <b>${c.needs}</b>`, `고칠 것 ${c.needs}개 AI에게 넘기기`, 'handoff', 'red');
+        return;
+      }
+      set(`${after}검수완료 <b>${c.done}</b> / ${c.all}`, c.todo ? '다음 검수항목 ›' : '', 'next-left', 'dark');
+    }
+
+    allsetHtml(c) {
+      if (!this.spec.board) {
+        if (c.all > 0 && c.left === 0) return '<div class="allset">모든 항목을 검수완료했어요.<br><button class="btn red sm" type="button" data-act="export">AI에게 넘기기</button></div>';
+        if (c.todo === 0 && c.needs > 0) return `<div class="allset">다 봤어요. 추가 검토 ${c.needs}개를 AI에게 넘겨 주세요.<br><button class="btn red sm" type="button" data-act="export">AI에게 넘기기</button></div>`;
+        return '';
+      }
+      const b = this.board || {};
+      if (b.round > this.spec.round && b.link) return `<div class="allset">${b.round}회차 검수항목이 나왔어요.<div class="row2"><button class="btn red sm" type="button" data-act="next-round">${b.round}회차 열기</button></div></div>`;
+      if (this.phase()) return c.todo === 0 ? '<div class="allset">AI가 고치는 중이에요. 다 고치면 여기에 다음 회차가 떠요.</div>' : '';
+      if (c.all > 0 && c.left === 0) {
+        if (b.share_url) return '<div class="allset">모두 검수완료했어요. 고객에게 보낼 링크가 준비됐어요.<div class="row2"><button class="btn ok sm" type="button" data-act="share">고객에게 보낼 링크</button></div></div>';
+        return this.spec.log ? '<div class="allset">모두 검수완료했어요. 고객 링크를 만드는 중이에요…</div>' : '<div class="allset">모두 검수완료했어요.<div class="row2"><button class="btn outline sm" type="button" data-act="handoff">AI에게 알리기</button></div></div>';
+      }
+      if (c.todo === 0 && c.needs > 0) return `<div class="allset">다 봤어요. 고칠 것 ${c.needs}개를 AI에게 넘겨 주세요.<div class="row2"><button class="btn red sm" type="button" data-act="handoff">고칠 것 ${c.needs}개 AI에게 넘기기</button></div></div>`;
+      return '';
+    }
+
+    sendToAi() {
+      if (!this.spec.board) {
+        this.exportModal();
+        return;
+      }
+      if (this.board && this.board.can_handoff === false) {
+        this.exportModal('이 검수는 넘길 사람이 정해져 있지 않아 자동으로 넘기지 못해요.');
+        return;
+      }
+      if (this.sending) return;
+      const c = this.counts();
+      const issue = this.board && this.board.issue;
+      const where = issue ? `대시보드 이슈 #${issue.id}` : '대시보드 이슈';
+      const title = c.needs ? `고칠 것 ${c.needs}개를 AI에게 넘길까요?` : '검수 결과를 AI에게 알릴까요?';
+      const body = c.needs
+        ? `${where}에 추가요청으로 바로 등록되고 AI가 고치기 시작해요. 다 고치면 여기에 다음 회차가 떠요.${c.todo ? ` 아직 안 본 ${c.todo}개는 다음 회차에도 그대로 남아요.` : ''}`
+        : `${where}에 검수 결과가 등록돼요.`;
+      this.modal(`<h3>${esc(title)}</h3><p>${esc(body)}</p><div class="mr"><button class="btn ghost sm" type="button" data-act="modal-cancel">취소</button><button class="btn red sm" type="button" data-act="modal-ok">넘기기</button></div>`);
+      this.modalDone = () => this.askName(() => this.postHandoff());
+    }
+
+    async postHandoff() {
+      if (this.sending) return;
+      this.sending = true;
+      this.toast('대시보드에 등록하는 중이에요…');
+      if (this.synced) await this.pushNow();
+      const c = this.counts();
+      const res = await this.call('POST', '/handoff', { text: buildExport(this.spec, this.state, this.name()), name: this.name(), round: this.spec.round, needs: c.needs });
+      this.sending = false;
+      if (res.ok && res.data) {
+        this.polledAt = Date.now();
+        this.setBoard(res.data);
+        this.renderTop();
+        this.renderNav();
+        const issue = res.data.issue;
+        this.toast(`대시보드${issue ? ` #${issue.id}` : ''}에 등록했어요 · AI가 곧 고치기 시작해요`);
+        return;
+      }
+      if (res.status === 409 && res.data) {
+        this.stale = true;
+        this.setBoard(res.data);
+        this.toast(res.message || '새 회차가 나왔어요');
+        return;
+      }
+      this.exportModal(res.message ? `자동으로 넘기지 못했어요(${res.message}).` : '자동으로 넘기지 못했어요(인터넷 연결을 확인해 주세요).');
+    }
+
+    shareText() {
+      const b = this.board || {};
+      return [String(b.message || this.spec.message || '').trim(), b.share_url || ''].filter(Boolean).join('\n\n');
+    }
+
+    seenText() {
+      const b = this.board || {};
+      const at = b.viewed_at ? Date.parse(b.viewed_at) : NaN;
+      return Number.isFinite(at) ? `고객이 ${stamp(at)}에 열어봤어요` : '고객은 아직 안 열어봤어요';
+    }
+
+    showShare() {
+      const b = this.board || {};
+      if (!b.share_url) {
+        this.toast(this.spec.board ? '모두 검수완료하면 고객에게 보낼 링크가 나와요' : '이 검수는 대시보드에 연결되지 않아 고객 링크가 없어요');
+        return;
+      }
+      this.modal('<h3>검수 끝 — 이 글만 고객에게 보내면 돼요</h3>'
+        + `<p>보낼 말과 업데이트 일지 링크예요. 대시보드 이슈${b.issue ? ` #${esc(b.issue.id)}` : ''}에도 남겨 뒀어요. ${esc(this.seenText())}.</p>`
+        + `<textarea class="short" readonly>${esc(this.shareText())}</textarea>`
+        + '<div class="mr"><button class="btn ghost sm" type="button" data-act="modal-cancel">닫기</button><button class="btn ghost sm" type="button" data-act="preview">고객 화면 보기</button>'
+        + '<button class="btn ghost sm" type="button" data-act="copy-link">링크만 복사</button><button class="btn ok sm" type="button" data-act="copy-share">보낼 말 복사</button></div>');
+      const ta = this.ui.modal.querySelector('textarea');
+      if (ta) ta.addEventListener('focus', () => ta.select());
+    }
+
+    sendHtml() {
+      const b = this.board || {};
+      const log = normalizeLog(b.log) || this.spec.log;
+      const msg = String(b.message || this.spec.message || '').trim();
+      if (!log && !msg) return '';
+      const head = log ? [[log.product, log.title].filter(Boolean).join(' '), log.version, log.date].filter(Boolean).join(' · ') : '';
+      const list = (xs) => (xs.length ? `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '');
+      const remain = log && log.remain.length ? `<div class="le rest"><b>남은 부분</b>${list(log.remain)}</div>` : '';
+      const entries = log ? log.entries.map((e) => `<div class="le"><b>${esc(e.title)}</b>${list(e.lines)}${e.links.map((l) => `<a class="ln" href="${esc(l.url)}" data-href="${esc(l.url)}">${esc(l.label)} ›</a>`).join(' ')}</div>`).join('') : '';
+      const share = b.share_url
+        ? `<div class="share">고객 링크가 열려 있어요<span class="mu">${esc(this.seenText())}</span><div class="row2"><button class="btn ok sm" type="button" data-act="share">보낼 말·링크</button><button class="btn ghost sm" type="button" data-act="preview">고객 화면 보기</button></div></div>`
+        : '';
+      return share
+        + (msg ? `<div class="thh">보낼 말</div><div class="msgp">${esc(msg)}</div>` : '')
+        + (log ? `<div class="thh">${esc(head || '업데이트 일지')}</div><div class="lgp">${remain}${entries}</div>` : '');
+    }
+
+    openRound() {
+      const b = this.board;
+      if (!b || !b.link) return;
+      this.save();
+      this.toast(`${b.round}회차를 열어요`);
+      setTimeout(() => {
+        location.href = b.link;
+      }, 350);
+    }
+
+    carry(it) {
+      if (!this.src || it.outside) return it.url;
+      return `${String(it.url).split('#')[0]}#${PARAM}=${this.src}&${ITEM_PARAM}=${encodeURIComponent(it.id)}`;
     }
 
     toast(message) {
@@ -1908,7 +2397,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       const id = local.text(ON) || local.text(LAST);
       const saved = id ? local.get(KEY + id) : null;
       if (!saved || !saved.spec) {
-        if (!options.quiet) flash('이 주소에 저장된 검수판이 없어요. 검수 링크를 먼저 열어 주세요');
+        if (!options.quiet) flash('이 주소에 저장된 검수가 없어요. 검수 링크를 먼저 열어 주세요');
         return null;
       }
       if (app && app.spec && app.spec.id === id) {
@@ -1945,6 +2434,8 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
     },
     link: async (spec, url) => `${String(url || location.href).split('#')[0]}#${PARAM}=${await encodeSpec(spec)}`,
     decode: (payload) => decodeSpec(payload),
+    board: () => (app ? app.board : null),
+    sync: () => (app ? app.serverLoad(false) : null),
   };
   window.qaReview = api;
 
@@ -1977,7 +2468,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         local.put(ON, null);
         session.put(ON, null);
         if (app) app.destroy({ keep: true });
-        flash('검수판을 껐어요. 다시 보려면 주소 끝에 #qa=on 을 붙여 주세요');
+        flash('검수 화면을 껐어요. 다시 보려면 주소 끝에 #qa=on 을 붙여 주세요');
         return true;
       }
       if (!param.value || param.value === 'on') {
@@ -1985,10 +2476,11 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         return true;
       }
       try {
-        const spec = await decodeSpec(/^[0-2]\./.test(param.value) ? param.value : `2.${param.value}`);
-        api.open(spec, { url: location.href.split('#')[0], start: param.item });
+        const payload = /^[0-2]\./.test(param.value) ? param.value : `2.${param.value}`;
+        const spec = await decodeSpec(payload);
+        api.open(spec, { url: location.href.split('#')[0], start: param.item, src: payload });
       } catch (e) {
-        flash('검수 링크를 읽지 못했어요. 링크가 끝까지 복사됐는지 확인해 주세요');
+        flash('검수 링크를 읽지 못했어요. 링크가 끝까지 복사됐는지, 방금 만든 회차면 1분 뒤 새로고침해 주세요');
       }
       return true;
     }
