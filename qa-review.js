@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.0.0';
+  const VERSION = '3.0.2';
   const SCRIPT_URL = 'https://honest-family.github.io/qa-review-kit/qa-review.js';
   const me = document.currentScript;
   const boot = (me && me.dataset && me.dataset.boot) || '';
@@ -39,6 +39,10 @@
   const SPLIT_MIN = 1280;
   // 3.0.0 (2026-11-13) — 박스 하나에 고객 요청 하나씩. 위·아래 두 카드, ①확인 ②AI 수정 ③고객 링크 단계 표시, '새 창에서 이어서 검수'를 없앴다.
   // 요청마다 [맞아요] 아니면 [고칠 게 있어요] 하나만 누르면 되고, 다른 주소(운영↔개발기) 확인은 같은 창이 옮겨 간다.
+  // 3.0.1 — 요청 장에서 '준비' 접힘 줄과 '바로가기'를 뺐다(주소·계정·화면 이동은 '이렇게 확인하세요'와 겹친다). 바로가기는 마지막 장의 고객 일지 미리보기와 고객 화면에만 남는다.
+  // 화면 표시가 없는 단계는 누를 수 없게 보이고(눌러도 '표시할 곳이 없어요'라고 하지 않는다), 다른 주소 항목의 단계를 누르면 그 화면으로 가라고 알려 준다.
+  // 3.0.2 — 못 한 요청 장에 고객 요청 원문(ask)·못 한 까닭(why)을 보이고, 고객에게 나갈 말(say, AI 초안)을 그 자리에서 고쳐 쓴다.
+  // 고쳐 쓴 말은 체크와 함께 저장되고, 대시보드가 고객 일지 '남은 부분'을 그 말로 바꾼다(고객 링크를 열기 전까지). 비우면 일지에서 빠진다.
   const STATUS = { todo: '확인 전', needs: '고칠 것', done: '확인 완료' };
   const SAID = {
     waiting: '대시보드에 접수됐어요. 곧 고치기 시작해요',
@@ -355,7 +359,13 @@
       version: String(raw.version || ''),
       date: String(raw.date || ''),
       entries,
-      remain: toList(raw.remain).map(String).filter((x) => x.trim()),
+      // 못 한 요청 — 글 한 줄(예전 검수판)이나 { id, ask: 고객 요청 원문, why: 못 한 까닭(고객에겐 안 나감), say: 고객에게 나갈 말 초안 }
+      remain: toList(raw.remain).map((r) => {
+        const o = r && typeof r === 'object' ? r : { say: r };
+        const say = String(o.say != null ? o.say : o.text != null ? o.text : '');
+        // 대표가 [고칠 게 있어요]로 남긴 말대로 고쳤으면 revision+1·reply — 요청과 같은 방식으로 다시 확인할 장이 된다
+        return { id: String(o.id || ''), ask: String(o.ask || '').trim(), why: String(o.why || '').trim(), say, revision: Number(o.revision) || 1, reply: String(o.reply || '') };
+      }).filter((r) => r.say.trim() || r.ask),
       revision: Number(raw.revision) || 1,
       reply: String(raw.reply || ''),
     };
@@ -383,11 +393,12 @@
       const rest = spec.items.filter((it) => it.kind !== 'send' && !used.has(it.id));
       if (rest.length) units.push(unit({ id: EXTRA, key: `u:${EXTRA}`, kind: 'extra', title: '그 밖에 확인할 것', checks: rest, rev: revOf(1, rest) }));
       const seen = {};
-      spec.log.remain.forEach((text) => {
-        let id = `m-${hashStr(text)}`;
+      spec.log.remain.forEach((r) => {
+        // id 를 적어 두면 글을 고쳐도 같은 장이다(체크·고쳐 쓴 말이 이어진다). 없으면 예전처럼 글로 정한다
+        let id = `m-${r.id || hashStr(r.say)}`;
         seen[id] = (seen[id] || 0) + 1;
         if (seen[id] > 1) id += `-${seen[id]}`;
-        units.push(unit({ id, key: `u:${id}`, kind: 'remain', title: text }));
+        units.push(unit({ id, key: `u:${id}`, kind: 'remain', title: (r.ask || r.say).trim(), ask: r.ask, why: r.why, say: r.say.trim(), rev: r.revision, reply: r.reply }));
       });
     } else {
       spec.items.forEach((it) => {
@@ -396,7 +407,7 @@
     }
     const send = spec.items.find((it) => it.kind === 'send');
     if (send) {
-      const text = spec.log ? [spec.log.entries.map((e) => [e.title, e.lines]), spec.log.remain] : [];
+      const text = spec.log ? [spec.log.entries.map((e) => [e.title, e.lines]), spec.log.remain.map((r) => r.say)] : [];
       units.push(unit({ id: SEND, key: SEND, kind: 'send', title: '고객에게 보낼 글', rev: send.revision, reply: String(send.reply || ''), sig: hashStr(JSON.stringify([spec.message, text])) }));
     } else {
       units.push(unit({ id: END, key: END, kind: 'end', title: '마무리' }));
@@ -564,6 +575,12 @@
     }
     return (e && e.status) || 'todo';
   };
+  // 못 한 요청마다 고객에게 나갈 말 — 검수판에서 고쳐 쓴 말이 있으면 그것, 없으면 AI 초안. 비운 것은 고객 일지에서 빠진다
+  const sayOf = (u, items) => {
+    const e = items[u.key];
+    return String(e && typeof e.say === 'string' ? e.say : u.say || '').trim();
+  };
+  const remainOut = (spec, items) => spec.units.filter((u) => u.kind === 'remain').map((u) => sayOf(u, items)).filter(Boolean);
   // 이 주소(지금 창)에서 확인하는 검수항목인지 — 빨간 표시는 이런 항목에만 붙는다
   const onSite = (it) => Boolean(it && it.url) && !it.outside && sameOrigin(it.url);
   const byTime = (a, b) => ((a.c.round || 0) - (b.c.round || 0)) || ((b.c.sys ? 1 : 0) - (a.c.sys ? 1 : 0)) || ((a.c.at || 0) - (b.c.at || 0));
@@ -642,6 +659,14 @@
       out.push('', '■ 아직 안 본 것: 손대지 말고 그대로 두세요');
       unseen.forEach((u) => out.push(`${no(u)} ${label(u)}`));
     }
+    const rest = units.filter((u) => u.kind === 'remain');
+    if (rest.length) {
+      out.push('', '■ 못 한 요청 — 고객에게 나갈 말: 다음 회차 log.remain 의 say 에 이 말 그대로 넣어 주세요((뺌)은 대표가 일지에서 뺀 것)');
+      rest.forEach((u) => {
+        const said = sayOf(u, items);
+        out.push(`${no(u)} ${oneLine(u.title)}${said !== u.say ? ' · 대표가 고침' : ''}: ${said || '(뺌)'}`);
+      });
+    }
     const ids = (list) => list.map((u) => u.id);
     const itemIds = (list) => [].concat(...list.map((u) => (u.kind === 'send' ? [SEND] : u.checks.map((it) => it.id))));
     out.push('', `검수판상태 ${JSON.stringify({
@@ -717,7 +742,6 @@ blockquote.ask{padding:1px 0 1px 11px;border-left:3px solid #dc2626}
 ul{margin:0;padding-left:18px}
 li{margin:3px 0;font-size:13px;line-height:1.55}
 .did li{font-size:13.5px;color:#1f2937}
-.golinks{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:4px;font-size:12.5px;font-weight:700}
 .note{font-size:12.5px;color:#4b5563;background:#f9fafb;border-radius:10px;padding:8px 10px;margin:0 0 12px;line-height:1.55}
 .chk{border:1px solid #e5e7eb;border-radius:12px;padding:10px 11px 8px;background:#fff}
 .ct{display:block;font-size:14px;font-weight:800;line-height:1.45;margin:0 0 3px}
@@ -732,6 +756,13 @@ li{margin:3px 0;font-size:13px;line-height:1.55}
 .steps{list-style:none;margin:0 0 4px;padding:0;display:flex;flex-direction:column;gap:5px}
 .st{display:flex;gap:9px;align-items:flex-start;cursor:pointer;border-radius:10px;padding:4px 5px 4px 2px;margin:0}
 .st:hover{background:#f6f7f9}
+.st.plain{cursor:default}
+.why{margin:0;font-size:13px;line-height:1.6;color:#4b5563}
+.sayta{display:block;width:100%;box-sizing:border-box;min-height:86px;max-height:240px;resize:vertical;border:1.5px solid #d1d5db;border-radius:10px;padding:8px 10px;font:inherit;font-size:13.5px;line-height:1.6;background:#fff;color:#111827;outline:none}
+.sayta:focus{border-color:#dc2626;box-shadow:0 0 0 3px rgba(220,38,38,.1)}
+.sayta[readonly]{background:#f9fafb;color:#4b5563}
+.lnk{display:inline-block;background:none;border:0;padding:0;margin-top:6px;color:#6b7280;font-size:12px;text-decoration:underline;cursor:pointer}
+.st.plain:hover{background:none}
 .st .n{flex:none;width:22px;height:22px;border-radius:50%;border:2px solid #dc2626;color:#dc2626;font-size:12px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;margin-top:1px;background:#fff}
 .st.on .n{background:#dc2626;color:#fff}
 .st .n.nomark{border-color:#cfd4dc;color:#6b7280}
@@ -751,11 +782,6 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
 .ai.bad summary{color:#b91c1c}
 .ai.na summary{color:#6b7280}
 .ai ul{margin-top:5px}
-details.prep{margin:0 0 10px;background:#f9fafb;border:1px solid #eef0f4;border-radius:10px;padding:7px 10px}
-details.prep summary{cursor:pointer;font-size:12.5px;color:#4b5563;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-details.prep summary b{color:#111827;margin-right:6px}
-details.prep[open] summary{white-space:normal}
-details.prep ul{margin-top:6px}
 .th{border-top:1px solid #eef0f4;padding-top:10px;margin-top:12px}
 .thh{font-size:12px;font-weight:800;color:#6b7280;margin-bottom:6px}
 .msg{background:#fffbeb;border-radius:10px;padding:7px 10px;margin-bottom:6px}
@@ -1025,6 +1051,7 @@ details.prep ul{margin-top:6px}
       this.ui.root.addEventListener('click', (e) => this.click(e));
       this.ui.root.addEventListener('input', (e) => {
         if (e.target.dataset && e.target.dataset.role === 'draft') this.draft = e.target.value;
+        if (e.target.dataset && e.target.dataset.role === 'say') this.setSay(e.target.dataset.key, e.target.value);
       });
       this.ui.root.addEventListener('keydown', (e) => {
         if (e.target.dataset && e.target.dataset.role === 'draft' && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -1035,7 +1062,6 @@ details.prep ul{margin-top:6px}
       });
       this.ui.body.addEventListener('scroll', () => this.fade(this.ui.body), { passive: true });
       this.ui.root.addEventListener('toggle', (e) => {
-        if (e.target.classList && e.target.classList.contains('prep')) this.prepOpen = e.target.open;
         this.fade(this.ui.body);
       }, true);
       this.ui.pick.addEventListener('mousemove', (e) => this.pickMove(e));
@@ -1186,6 +1212,27 @@ details.prep ul{margin-top:6px}
     entry(id) {
       if (!this.state.items[id]) this.state.items[id] = { status: 'todo', rev: 1, comments: [], at: 0 };
       return this.state.items[id];
+    }
+
+    // 못 한 요청 — 못 한 까닭(대표만 봄)과 고객에게 나갈 말(AI 초안을 여기서 고쳐 쓰면 고객 일지에 그대로)
+    remainHtml(u) {
+      const said = sayOf(u, this.state.items);
+      const edited = said !== u.say;
+      const locked = Boolean(this.board && this.board.share_url);
+      const why = u.why ? `<div class="sec"><h5>못 한 까닭<span class="mu">고객에게는 안 나가요</span></h5><p class="why">${esc(u.why)}</p></div>` : '';
+      const hint = locked ? '고객 링크를 만든 뒤라 고칠 수 없어요' : edited ? '고쳐 쓴 말이 나가요' : 'AI 초안이에요. 고쳐 쓰면 그대로 나가요';
+      return `${why}<div class="sec"><h5>고객에게 이렇게 나가요<span class="mu">${hint}</span></h5>`
+        + `<textarea class="sayta" data-role="say" data-key="${esc(u.key)}" rows="3" placeholder="비워 두면 고객 일지에서 빠져요"${locked ? ' readonly' : ''}>${esc(said)}</textarea>`
+        + `${edited && !locked ? `<button class="lnk" type="button" data-act="say-reset" data-key="${esc(u.key)}">AI 초안으로 되돌리기</button>` : ''}</div>`;
+    }
+
+    // 글자마다 다시 그리지 않는다(쓰던 자리 유지). 이 브라우저엔 바로, 대시보드엔 잠시 뒤 한 번에 저장된다
+    setSay(key, value) {
+      if (!key || (this.board && this.board.share_url)) return;
+      const e = this.entry(key);
+      e.say = String(value);
+      e.at = Date.now();
+      this.save();
     }
 
     // 한 장을 부르는 말 — 업데이트 일지가 있으면 고객 요청, 없으면(옛 검수 링크) 검수항목
@@ -1427,14 +1474,13 @@ details.prep ul{margin-top:6px}
       const reqs = this.reqUnits();
       const tag = u.kind === 'remain' ? '이번엔 못 한 요청' : u.kind === 'extra' ? '따로 확인할 것' : s.log ? '고객 요청' : '검수항목';
       const head = `<div class="uh"><span class="tag${u.kind === 'remain' ? ' rest' : ''}">${tag} ${reqs.indexOf(u) + 1} / ${reqs.length}</span>${st !== 'todo' ? `<span class="pill ${st}">${STATUS[st]}</span>` : ''}</div>`;
-      const prep = s.prep.length ? `<details class="prep"${this.prepOpen ? ' open' : ''}><summary><b>준비</b>${esc(String(s.prep[0]).replace(/[`*]/g, ''))}</summary><ul>${s.prep.map((x) => `<li>${inline(x)}</li>`).join('')}</ul></details>` : '';
-      const ask = u.kind === 'req' || u.kind === 'remain' ? `<blockquote class="ask">${esc(u.title)}</blockquote>` : `<h3 class="ask">${inline(u.title)}</h3>`;
+      let ask = u.kind === 'req' ? `<blockquote class="ask">${esc(u.title)}</blockquote>` : `<h3 class="ask">${inline(u.title)}</h3>`;
+      if (u.kind === 'remain') ask = u.ask ? `<blockquote class="ask">${esc(u.ask)}</blockquote>` : '';
       const did = u.kind === 'req' && u.lines.length
-        ? `<div class="sec"><h5>우리가 한 것<span class="mu">고객 일지에 이대로 나가요</span></h5><ul class="did">${u.lines.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`
-          + `${u.links.length ? `<div class="golinks">${u.links.map((l) => `<a class="ln" href="${esc(l.url)}" data-href="${esc(l.url)}">${esc(l.label)} ›</a>`).join('')}</div>` : ''}</div>`
+        ? `<div class="sec"><h5>우리가 한 것<span class="mu">고객 일지에 이대로 나가요</span></h5><ul class="did">${u.lines.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`
         : '';
-      const rest = u.kind === 'remain' ? '<p class="note">고객 일지 \'남은 부분\'에 이대로 나가요.</p>' : '';
-      return head + prep + ask + did + rest + this.checkHtml(u) + this.threadHtml(u) + (this.composing ? this.composerHtml() : '');
+      const rest = u.kind === 'remain' ? this.remainHtml(u) : '';
+      return head + ask + did + rest + this.checkHtml(u) + this.threadHtml(u) + (this.composing ? this.composerHtml() : '');
     }
 
     checkHtml(u) {
@@ -1463,7 +1509,9 @@ details.prep ul{margin-top:6px}
       const sit = it.situation ? `<p class="sit">${inline(it.situation)}</p>` : '';
       const steps = it.steps.length ? `<ol class="steps">${it.steps.map((step, i) => {
         const mark = step.marks.length > 0 && here;
-        return `<li class="st" data-step="${i + 1}" data-act="step"><span class="n${mark ? '' : ' nomark'}">${i + 1}</span><div class="tx">${inline(step.text)}`
+        // 표시가 있는 단계만 누를 수 있다(누르면 화면의 그 자리로). 표시가 없거나 새 창에서 볼 항목은 그냥 글
+        const tap = step.marks.length > 0 && !it.outside;
+        return `<li class="st${tap ? '' : ' plain'}" data-step="${i + 1}"${tap ? ' data-act="step"' : ''}><span class="n${mark ? '' : ' nomark'}">${i + 1}</span><div class="tx">${inline(step.text)}`
           + `${step.copy ? `<div class="cpy"><pre>${esc(step.copy)}</pre><button type="button" data-act="copy" data-step="${i}">복사하기</button></div>` : ''}</div></li>`;
       }).join('')}</ol>` : '';
       const ai = it.ai ? this.aiHtml(it.ai) : '';
@@ -1545,7 +1593,7 @@ details.prep ul{margin-top:6px}
       }
       const ok = more ? ['다음 확인 ›', 'next-check', 'ok'] : [last ? '맞아요 → 마무리' : `맞아요 → 다음 ${this.noun()}`, 'ok-unit', 'ok'];
       let say;
-      if (u.kind === 'remain') say = '이번에 못 하는 게 맞고 까닭도 맞으면 [맞아요]';
+      if (u.kind === 'remain') say = this.board && this.board.share_url ? '이번에 못 한 요청이에요' : '고객에게 나갈 말을 고쳐 쓰고, 이대로 보내도 되면 [맞아요]';
       else if (!it) say = '고객에게 이대로 나가도 되면 [맞아요]';
       else if (it.outside) say = `[새 창에서 열기]로 확인하고 돌아와서 ${more ? '[다음 확인 ›]' : '[맞아요]'}`;
       else say = `${(!it.url || onSite(it)) && it.steps.some((x) => x.marks.length) ? '빨간 표시대로' : '위 순서대로'} 해 보고 ${more ? '맞으면 [다음 확인 ›]' : '다 맞으면 [맞아요]'}`;
@@ -1859,6 +1907,14 @@ details.prep ul{margin-top:6px}
       const u = this.current();
       // 사람이 박스를 만지기 시작했으면 대시보드 기록이 늦게 와도 자리를 옮기지 않는다(쓰던 말이 날아가지 않게)
       this.autoPos = false;
+      if (act === 'say-reset') {
+        const en = this.entry(el.dataset.key);
+        delete en.say;
+        en.at = Date.now();
+        this.save();
+        this.renderAll();
+        return;
+      }
       if (act === 'fold') {
         this.state.fold = !this.state.fold;
         this.applyView();
@@ -1983,11 +2039,16 @@ details.prep ul{margin-top:6px}
     }
 
     focusStep(step) {
+      const it = this.check();
+      const s = it && it.steps[step - 1];
+      if (!s || !s.marks.length) return;
+      if (it.url && !onSite(it)) {
+        this.toast(`${placeName(it.url)} 화면으로 가면 빨간 표시가 나와요`);
+        return;
+      }
       const mine = this.targets.filter((t) => t.kind === 'step' && t.step === step && t.el);
       if (!mine.length) {
-        const it = this.check();
-        const s = it && it.steps[step - 1];
-        this.toast(s && s.marks.length ? '아직 화면에 없어요. 앞 단계를 하면 나타나요' : '이 단계는 화면에 표시할 곳이 없어요');
+        this.toast('아직 화면에 없어요. 앞 단계를 하면 나타나요');
         return;
       }
       attempt(() => mine[0].el.scrollIntoView({ block: 'center', behavior: 'smooth' }), null);
@@ -2386,7 +2447,10 @@ details.prep ul{margin-top:6px}
       if (sig === this.pushedSig) return null;
       const c = this.counts();
       this.pushedSig = sig;
-      const res = await this.call('PUT', '/state', { state: { items: this.state.items }, round: this.spec.round, counts: { total: c.all, done: c.done, needs: c.needs } });
+      const body = { state: { items: this.state.items }, round: this.spec.round, counts: { total: c.all, done: c.done, needs: c.needs } };
+      // 못 한 요청마다 고객에게 나갈 말(고쳐 쓴 말) — 대시보드가 고객 일지 '남은 부분'을 이 말로 바꾼다(고객 링크를 열기 전까지)
+      if (this.spec.log) body.remain = remainOut(this.spec, this.state.items);
+      const res = await this.call('PUT', '/state', body);
       if (res.ok) {
         this.setBoard(res.data);
       } else if (res.status === 409 && res.data) {
@@ -2521,7 +2585,9 @@ details.prep ul{margin-top:6px}
       if (!log && !msg) return '';
       const head = log ? [[log.product, log.title].filter(Boolean).join(' '), log.version, log.date].filter(Boolean).join(' · ') : '';
       const list = (xs) => (xs.length ? `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '');
-      const remain = log && log.remain.length ? `<div class="le rest"><b>남은 부분</b>${list(log.remain)}</div>` : '';
+      // 남은 부분 — 고객 링크를 만들기 전엔 검수판에서 고쳐 쓴 말(만들 때 그 말이 그대로 나간다), 만든 뒤엔 고객이 보는 그대로
+      const rest = !log ? [] : b.share_url || !this.spec.log ? log.remain.map((r) => r.say.trim()).filter(Boolean) : remainOut(this.spec, this.state.items);
+      const remain = rest.length ? `<div class="le rest"><b>남은 부분</b>${list(rest)}</div>` : '';
       const entries = log ? log.entries.map((e) => `<div class="le"><b>${esc(e.title)}</b>${list(e.lines)}${e.links.map((l) => `<a class="ln" href="${esc(l.url)}" data-href="${esc(l.url)}">${esc(l.label)} ›</a>`).join(' ')}</div>`).join('') : '';
       const share = b.share_url ? `<div class="share">고객 링크가 만들어졌어요<span class="mu">${esc(this.seenText())}</span></div>` : '';
       return `${share}<div class="sec"><h5>고객에게 이렇게 나가요</h5>${msg ? `<div class="msgp">${esc(msg)}</div>` : ''}`
