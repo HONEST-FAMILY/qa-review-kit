@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.0.3';
+  const VERSION = '3.0.4';
   const SCRIPT_URL = 'https://honest-family.github.io/qa-review-kit/qa-review.js';
   const me = document.currentScript;
   const boot = (me && me.dataset && me.dataset.boot) || '';
@@ -46,7 +46,14 @@
   // 3.0.3 — 단계를 누르면 그 단계 화면으로 데려간다: 다른 화면이면 그 화면을 열고, 앞 단계의 여는 단추(open: true — 창 열기·펼치기처럼 데이터를 안 바꾸는 단추)를
   // 대신 눌러 창·펼침을 띄운 뒤 빨간 표시를 깜빡인다(대표: "화면에 없다 그러는데 그럼 그 화면을 켜서 이동을 해"). 확인이 여럿이어도 하나씩 넘기지 않고
   // [검토 완료] 하나로 그 요청을 끝내고 바로 다음 요청으로 간다(대표: "'다음 확인'이 아니라 '검토 완료' 버튼 누르면 그냥 아예 다음 칸으로"). 확인은 번호로 골라 본다.
-  const STATUS = { todo: '검토 전', needs: '고칠 것', done: '검토 완료' };
+  // 3.0.4 — 고객 요청·못 한 요청을 [삭제]하면 고객 업데이트 일지에서 빠진다(대표: "아예 삭제시키고 싶은 업데이트일지에도 안넣고 싶은 요청사항도 있는데 … 하단에 삭제 버튼도").
+  // 지운 요청은 [되살리기]로 다시 넣는다. 고객 링크를 만든 뒤에는 고객이 본 글이라 지우지 않는다. 대시보드에는 남은 것만 검토할 것으로 센다.
+  // [고칠 게 있어요]에 파일을 붙인다(대표: "파일들 드래그앤드랍으로 첨부할 수 있게 해줘 (첨부하기 영역 점선으로 그려줘)") — 점선 칸에 끌어다 놓거나 눌러서 고르고,
+  // 화면 캡처는 붙여 넣어도 된다. 고르는 즉시 대시보드에 올리고(검수판이 대시보드에 연결된 것만), [AI에게 보내기] 때 이슈 댓글에 사진·링크로 붙는다.
+  const STATUS = { todo: '검토 전', needs: '고칠 것', done: '검토 완료', drop: '삭제' };
+  const FILE_MAX = 100 * 1024 * 1024;
+  const FILES_MAX = 10;
+  const CLIP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
   const SAID = {
     waiting: '대시보드에 접수됐어요. 곧 고치기 시작해요',
     running: 'AI가 고치는 중이에요',
@@ -586,7 +593,12 @@
     const e = items[u.key];
     return String(e && typeof e.say === 'string' ? e.say : u.say || '').trim();
   };
-  const remainOut = (spec, items) => spec.units.filter((u) => u.kind === 'remain').map((u) => sayOf(u, items)).filter(Boolean);
+  const remainOut = (spec, items) => spec.units.filter((u) => u.kind === 'remain' && unitStatus(u, items) !== 'drop').map((u) => sayOf(u, items)).filter(Boolean);
+  // [삭제]한 고객 요청의 제목 — 대시보드가 고객 일지에서 이 요청을 뺀다(고객 링크를 열기 전까지)
+  const hideOut = (spec, items) => spec.units.filter((u) => u.kind === 'req' && unitStatus(u, items) === 'drop').map((u) => u.title);
+  const sizeText = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(n >= 10485760 ? 0 : 1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`);
+  // 남긴 말에 붙인 파일 — 대시보드에 올라간 주소(http·https)만
+  const filesOf = (c) => toList(c && c.files).filter((f) => f && /^https?:\/\//i.test(String(f.url || '')));
   // 이 주소(지금 창)에서 확인하는 검수항목인지 — 빨간 표시는 이런 항목에만 붙는다
   const onSite = (it) => Boolean(it && it.url) && !it.outside && sameOrigin(it.url);
   const byTime = (a, b) => ((a.c.round || 0) - (b.c.round || 0)) || ((b.c.sys ? 1 : 0) - (a.c.sys ? 1 : 0)) || ((a.c.at || 0) - (b.c.at || 0));
@@ -613,10 +625,11 @@
     return out.sort(byTime);
   };
   const unitCounts = (spec, items, withSend) => {
-    const c = { todo: 0, needs: 0, done: 0, all: 0 };
+    const c = { todo: 0, needs: 0, done: 0, drop: 0, all: 0 };
     spec.units.forEach((u) => {
       if (u.kind === 'end' || (u.kind === 'send' && !withSend)) return;
-      c[unitStatus(u, items)] += 1;
+      const st = unitStatus(u, items);
+      c[STATUS[st] ? st : 'todo'] += 1;
       c.all += 1;
     });
     c.left = c.todo + c.needs;
@@ -625,8 +638,8 @@
   const buildExport = (spec, state, name) => {
     const items = state.items;
     const units = spec.units.filter((u) => u.kind !== 'end');
-    const group = { needs: [], done: [], todo: [] };
-    units.forEach((u) => group[unitStatus(u, items)].push(u));
+    const group = { needs: [], done: [], todo: [], drop: [] };
+    units.forEach((u) => (group[unitStatus(u, items)] || group.todo).push(u));
     const no = (u) => `${units.indexOf(u) + 1})`;
     const label = (u) => (u.kind === 'send' ? '고객에게 보낼 글(업데이트 일지·보낼 말)' : u.kind === 'remain' ? `[이번엔 못 함] ${oneLine(u.title)}` : oneLine(u.title));
     const about = (u, x) => {
@@ -640,7 +653,7 @@
       `[검수판 결과] ${spec.title}${spec.round > 1 ? ` · ${spec.round}회차` : ''}`,
       `검수자 ${name || '이름 없음'} · ${stamp(Date.now())}`,
       `주소 ${spec.site}`,
-      `${spec.log ? '고객 요청' : '검수'} ${reqs.length}개 · 확인 완료 ${count('done')} · 고칠 것 ${count('needs')} · 아직 안 봄 ${count('todo')}`,
+      `${spec.log ? '고객 요청' : '검수'} ${reqs.length}개 · 확인 완료 ${count('done')} · 고칠 것 ${count('needs')} · 아직 안 봄 ${count('todo')}${count('drop') ? ` · 삭제 ${count('drop')}` : ''}`,
     ];
     if (group.needs.length) {
       out.push('', '■ 고칠 것: 남긴 말대로 고쳐 주세요');
@@ -648,8 +661,9 @@
         out.push(`${no(u)} ${label(u)}`);
         freshOf(u, items).forEach((x) => {
           const it = about(u, x);
-          out.push(`   - ${x.c.by} · ${stamp(x.c.at)}${it ? ` [확인: ${oneLine(it.title)}${it.url ? ` ${it.url}` : ''}]` : ''}: ${oneLine(x.c.text)}`);
+          out.push(`   - ${x.c.by} · ${stamp(x.c.at)}${it ? ` [확인: ${oneLine(it.title)}${it.url ? ` ${it.url}` : ''}]` : ''}: ${oneLine(x.c.text) || '(파일만 붙임)'}`);
           if (x.c.pin) out.push(`     위치: ${x.c.pin.path} · ${x.c.pin.desc}${x.c.pin.selector ? ` · ${x.c.pin.selector}` : ''}`);
+          filesOf(x.c).forEach((f) => out.push(`     첨부: ${oneLine(f.name || '파일')} ${f.url}`));
         });
       });
     }
@@ -657,7 +671,7 @@
       out.push('', '■ 확인 완료: 일지에서 빼지 말고 그대로 두면 다음 회차에도 확인 완료로 남아요');
       group.done.forEach((u) => {
         const notes = freshOf(u, items);
-        out.push(`${no(u)} ${label(u)}${notes.length ? ` (참고: ${notes.map((x) => oneLine(x.c.text)).join(' | ')})` : ''}`);
+        out.push(`${no(u)} ${label(u)}${notes.length ? ` (참고: ${notes.map((x) => [oneLine(x.c.text)].concat(filesOf(x.c).map((f) => f.url)).filter(Boolean).join(' ')).join(' | ')})` : ''}`);
       });
     }
     const unseen = group.todo.filter((u) => u.kind !== 'send');
@@ -665,7 +679,11 @@
       out.push('', '■ 아직 안 본 것: 손대지 말고 그대로 두세요');
       unseen.forEach((u) => out.push(`${no(u)} ${label(u)}`));
     }
-    const rest = units.filter((u) => u.kind === 'remain');
+    if (group.drop.length) {
+      out.push('', '■ 삭제: 대표가 지운 요청이에요. 고객 일지에서 뺐으니 다음 회차 log 에서도 빼 주세요(entries·remain 모두, 묶인 검수항목도)');
+      group.drop.forEach((u) => out.push(`${no(u)} ${label(u)}`));
+    }
+    const rest = units.filter((u) => u.kind === 'remain' && !group.drop.includes(u));
     if (rest.length) {
       out.push('', '■ 못 한 요청 — 고객에게 나갈 말: 다음 회차 log.remain 의 say 에 이 말 그대로 넣어 주세요((뺌)은 대표가 일지에서 뺀 것)');
       rest.forEach((u) => {
@@ -677,8 +695,8 @@
     const itemIds = (list) => [].concat(...list.map((u) => (u.kind === 'send' ? [SEND] : u.checks.map((it) => it.id))));
     out.push('', `검수판상태 ${JSON.stringify({
       id: spec.id, round: spec.round,
-      units: { done: ids(group.done), needs: ids(group.needs), todo: ids(group.todo) },
-      done: itemIds(group.done), needs: itemIds(group.needs), todo: itemIds(group.todo),
+      units: { done: ids(group.done), needs: ids(group.needs), todo: ids(group.todo), drop: ids(group.drop) },
+      done: itemIds(group.done), needs: itemIds(group.needs), todo: itemIds(group.todo), drop: itemIds(group.drop),
     })}`);
     return out.join('\n');
   };
@@ -729,6 +747,7 @@ svg{display:block}
 .seg:hover i{background:#cbd2dc}
 .seg.done i{background:#16a34a}
 .seg.needs i{background:#f59e0b}
+.seg.drop i{background:#fca5a5}
 .seg.cur i{height:8px;box-shadow:0 0 0 2px #fff,0 0 0 3.5px #111827}
 .body{flex:1;min-height:0;overflow:auto;padding:10px 14px 12px;overscroll-behavior:contain}
 .body.fadeout{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent)}
@@ -739,6 +758,8 @@ svg{display:block}
 .pill{font-size:11.5px;font-weight:800;border-radius:999px;padding:0 8px;line-height:20px;white-space:nowrap;background:#f3f4f6;color:#4b5563}
 .pill.needs{background:#fffbeb;color:#b45309}
 .pill.done{background:#f0fdf4;color:#15803d}
+.pill.drop{background:#fef2f2;color:#b91c1c}
+.dropped{background:#fef2f2;color:#991b1b;border-radius:10px;padding:8px 11px;font-size:13px;font-weight:700;line-height:1.5;margin:0 0 10px}
 .ask{margin:0 0 12px;font-size:16px;font-weight:800;line-height:1.45;color:#111827}
 blockquote.ask{padding:1px 0 1px 11px;border-left:3px solid #dc2626}
 .sec{margin:0 0 12px}
@@ -812,6 +833,25 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
 .draftpin{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;color:#b45309;font-weight:700}
 .draftpin svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2}
 .draftpin button{color:#9ca3af;font-weight:700;margin-left:auto}
+.dz{display:flex;align-items:center;gap:10px;width:100%;margin-top:8px;padding:12px 14px;border:2px dashed #cbd2dc;border-radius:12px;background:#fafafa;color:#4b5563;font-size:13px;font-weight:700;line-height:1.45;text-align:left;transition:border-color .12s,background-color .12s,color .12s}
+.dz:hover,.dz.over{border-color:#dc2626;background:#fef2f2;color:#991b1b}
+.dz svg{flex:none;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.dz small{display:block;margin-top:2px;font-size:11.5px;font-weight:600;color:#9ca3af}
+.dz:hover small,.dz.over small{color:#b91c1c}
+.fls{display:flex;flex-direction:column;gap:4px;margin-top:6px}
+.fls:empty{display:none}
+.fl{display:flex;align-items:center;gap:6px;min-width:0;padding:5px 8px;border-radius:8px;background:#f3f4f6;color:#374151;font-size:12.5px;line-height:1.4;text-decoration:none}
+a.fl:hover{background:#e5e7eb}
+.fl svg{flex:none;width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.fl .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}
+.fl .fz{flex:none;color:#9ca3af;font-size:11.5px}
+.fl .fst{flex:none;color:#2563eb;font-weight:700;font-size:11.5px}
+.fl.bad{flex-wrap:wrap;background:#fef2f2}
+.fl .fst.bad{flex-basis:100%;order:9;color:#b91c1c;white-space:normal}
+.fl button{flex:none;width:20px;height:20px;border-radius:5px;color:#9ca3af;font-size:15px;font-weight:800;line-height:1;display:inline-flex;align-items:center;justify-content:center}
+.fl button:hover{background:#e5e7eb;color:#374151}
+.msg .fls{margin-top:5px}
+.msg .fl{background:rgba(255,255,255,.75)}
 .me{font-size:12px;color:#6b7280;white-space:nowrap}
 .me button{color:#dc2626;font-weight:800;margin-left:4px}
 .ft{flex:none;border-top:1px solid #eef0f4;background:#fff;padding:9px 10px 10px}
@@ -824,6 +864,11 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
 .acts .back{flex:none;width:44px;padding:0;font-size:20px;font-weight:700}
 .acts .a{flex:1}
 .acts .b{flex:1.5}
+.acts.wx .a,.acts.wx .b{flex:1 1 auto}
+.acts .x{flex:none;padding:0 13px}
+.btn.del{color:#dc2626}
+.btn.outline.del{box-shadow:inset 0 0 0 1.5px #fecaca}
+.btn.outline.del:hover{background:#fef2f2}
 .btn.ghost{background:#f3f4f6;color:#374151}
 .btn.ghost:hover{background:#e9ebef}
 .btn.dark{background:#111827;color:#fff}
@@ -842,6 +887,8 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
 .tally .t-done b{color:#15803d}
 .tally .t-needs{background:#fffbeb;color:#92400e}
 .tally .t-needs b{color:#b45309}
+.tally .t-drop{background:#fef2f2;color:#991b1b}
+.tally .t-drop b{color:#b91c1c}
 .rows{display:flex;flex-direction:column;gap:2px}
 .row{display:flex;align-items:flex-start;gap:9px;padding:7px 8px;border-radius:10px;width:100%}
 .row:hover{background:#f6f7f9}
@@ -852,6 +899,8 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
 .dot.done{background:#16a34a;border-color:#16a34a}
 .dot svg{width:10px;height:10px;stroke-width:3.4}
 .dot.needs::after{content:"!";font-size:11px;font-weight:900;line-height:1}
+.dot.drop{background:#f87171;border-color:#f87171}
+.dot.drop::after{content:"−";font-size:13px;font-weight:900;line-height:1}
 .empty{color:#6b7280;font-size:13px;margin:10px 2px}
 .msgp{background:#f6f7f9;border-radius:10px;padding:9px 11px;font-size:13px;line-height:1.62;white-space:pre-wrap;margin:0 0 8px;color:#1f2937}
 .lgp{border:1px solid #e5e8eb;border-radius:12px;padding:10px 12px;background:#fff}
@@ -984,6 +1033,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.raf = 0;
       this.draft = '';
       this.draftPin = null;
+      this.draftFiles = [];
       this.composing = false;
       this.focusDraft = false;
       this.picking = false;
@@ -1074,6 +1124,36 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.ui.root.addEventListener('toggle', (e) => {
         this.fade(this.ui.body);
       }, true);
+      // 3.0.4 — 파일 붙이기. 박스 어디에 떨어뜨려도 받는다(브라우저가 파일을 열어 검수 화면을 떠나지 않게). 점선 칸은 끄는 동안 밝아진다
+      const withFiles = (e) => Boolean(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
+      this.ui.root.addEventListener('dragover', (e) => {
+        if (!withFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        this.dragOver();
+      });
+      this.ui.root.addEventListener('drop', (e) => {
+        if (!withFiles(e)) return;
+        e.preventDefault();
+        this.attach(e.dataTransfer.files);
+      });
+      this.ui.root.addEventListener('change', (e) => {
+        if (!(e.target.dataset && e.target.dataset.role === 'file')) return;
+        this.attach(e.target.files);
+        e.target.value = '';
+      });
+      this.ui.root.addEventListener('paste', (e) => {
+        if (!(e.target.dataset && e.target.dataset.role === 'draft') || !this.canAttach()) return;
+        const files = Array.from((e.clipboardData && e.clipboardData.files) || []);
+        if (!files.length) return;
+        e.preventDefault();
+        const t = new Date();
+        const hms = [t.getHours(), t.getMinutes(), t.getSeconds()].map((n) => String(n).padStart(2, '0')).join('');
+        // 화면 캡처는 이름이 모두 image.png 로 온다 — 붙여 넣은 시각으로 이름을 붙인다
+        this.attach(files.map((f, i) => (/^image\.\w+$/i.test(f.name)
+          ? attempt(() => new File([f], `화면캡처-${hms}${files.length > 1 ? `-${i + 1}` : ''}.${f.name.split('.').pop()}`, { type: f.type }), f)
+          : f)));
+      });
       this.ui.pick.addEventListener('mousemove', (e) => this.pickMove(e));
       this.ui.pick.addEventListener('click', (e) => this.pickClick(e));
     }
@@ -1122,6 +1202,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.composing = false;
       this.draft = '';
       this.draftPin = null;
+      this.draftFiles = [];
       // 새 회차는 지난 회차에 보던 자리가 아니라 다시 볼 첫 요청의 첫 확인부터
       const lastRound = saved && saved.spec ? Number(saved.spec.round) || 1 : spec.round;
       const at = this.place(opts.start) || (lastRound < spec.round ? null : this.place(this.state.cur, this.state.chk));
@@ -1318,7 +1399,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
     summary() {
       const c = this.counts();
       return {
-        id: this.spec.id, round: this.spec.round, items: this.spec.items.length, units: c.all, todo: c.todo, needs: c.needs, done: c.done,
+        id: this.spec.id, round: this.spec.round, items: this.spec.items.length, units: c.all, todo: c.todo, needs: c.needs, done: c.done, drop: c.drop,
         current: this.state.cur, check: this.state.chk, frame: Boolean(this.shell),
       };
     }
@@ -1368,6 +1449,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         this.composing = false;
         this.draft = '';
         this.draftPin = null;
+        this.draftFiles = [];
       }
       this.state.cur = u.id;
       this.state.chk = Math.max(0, Math.min(Number(chk) || 0, u.checks.length - 1));
@@ -1498,7 +1580,11 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         ? `<div class="sec"><h5>우리가 한 것<span class="mu">고객 일지에 이대로 나가요</span></h5><ul class="did">${u.lines.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`
         : '';
       const rest = u.kind === 'remain' ? this.remainHtml(u) : '';
-      return head + ask + did + rest + this.checkHtml(u) + this.threadHtml(u) + (this.composing ? this.composerHtml() : '');
+      // 3.0.4 — 지운 요청은 맨 위에 알린다(되살리기는 아래 버튼)
+      const gone = st === 'drop'
+        ? `<div class="dropped">삭제한 ${this.noun()}이에요. 고객 업데이트 일지에 안 나가요${this.canDrop(u) ? ' · 다시 넣으려면 아래 [되살리기]' : ''}</div>`
+        : '';
+      return head + gone + ask + did + rest + this.checkHtml(u) + this.threadHtml(u) + (this.composing ? this.composerHtml() : '');
     }
 
     checkHtml(u) {
@@ -1547,7 +1633,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         const about = owner !== u.key ? this.item(owner) : c.check ? this.item(c.check) : null;
         return `<div class="msg${c.sys ? ' sys' : ''}"><div class="mh"><b>${esc(c.by || '검수자')}</b><span>${esc(when(c.at))}</span>`
           + `${c.sys ? '' : `<button class="del" type="button" data-act="del" data-owner="${esc(owner)}" data-cid="${esc(c.id)}" title="지우기" aria-label="지우기">×</button>`}</div>`
-          + `<div class="mt">${inline(c.text)}</div>${about && u.checks.length > 1 ? `<span class="about">${esc(String(about.title).replace(/\*\*|`/g, ''))}</span>` : ''}`
+          + `<div class="mt">${inline(c.text)}</div>${this.filesHtml(filesOf(c))}${about && u.checks.length > 1 ? `<span class="about">${esc(String(about.title).replace(/\*\*|`/g, ''))}</span>` : ''}`
           + `${c.pin ? `<button class="pin" type="button" data-act="pin-show" data-cid="${esc(c.id)}">${ICON.pin}${esc(c.pin.path)} · ${esc(c.pin.desc)}</button>` : ''}</div>`;
       }).join('')}</div>`;
     }
@@ -1555,7 +1641,12 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
     composerHtml() {
       const nm = this.name();
       const pin = this.draftPin ? `<div class="draftpin">${ICON.pin}<span>${esc(this.draftPin.path)} · ${esc(this.draftPin.desc)}</span><button type="button" data-act="unpin">빼기</button></div>` : '';
-      return `<div class="cp"><div class="thh">고칠 점</div><textarea data-role="draft" rows="3" placeholder="어디가 어떻게 다른지 적어 주세요">${esc(this.draft)}</textarea>${pin}`
+      // 3.0.4 — 점선 첨부 칸: 끌어다 놓기·눌러서 고르기·화면 캡처 붙여 넣기. 대시보드에 연결된 검수판만(올릴 곳이 있어야 해서)
+      const dz = this.spec.board
+        ? `<button class="dz" type="button" data-act="attach">${CLIP}<span>파일을 여기로 끌어다 놓거나 눌러서 고르세요<small>사진·영상·문서 한 개 100MB까지 · 화면 캡처는 붙여 넣어도 돼요</small></span></button>`
+          + `<input type="file" multiple hidden data-role="file"><div class="fls" data-role="files">${this.draftFiles.map((f) => this.draftChip(f)).join('')}</div>`
+        : '';
+      return `<div class="cp"><div class="thh">고칠 점</div><textarea data-role="draft" rows="3" placeholder="어디가 어떻게 다른지 적어 주세요">${esc(this.draft)}</textarea>${pin}${dz}`
         + `<div class="cpr"><button class="btn ghost sm" type="button" data-act="pick">${ICON.pin}화면에서 위치 찍기</button><span class="sp"></span>`
         + `${nm ? `<span class="me">${esc(nm)}<button type="button" data-act="rename">바꾸기</button></span>` : ''}</div></div>`;
     }
@@ -1569,17 +1660,19 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       const c = this.reqCounts();
       const sendSt = u.kind === 'send' ? this.statusOf(u) : 'todo';
       const head = `<div class="uh"><span class="tag">${u.kind === 'send' ? '마지막 · 고객에게 보낼 글' : '마무리'}</span>${sendSt !== 'todo' ? `<span class="pill ${sendSt}">${STATUS[sendSt]}</span>` : ''}</div>`;
-      const tally = c.all ? `<div class="tally"><span class="t-done">검토 완료<b>${c.done}</b></span><span class="t-needs">고칠 것<b>${c.needs}</b></span><span>아직 안 봄<b>${c.todo}</b></span></div>` : '';
+      const tally = c.all ? `<div class="tally"><span class="t-done">검토 완료<b>${c.done}</b></span><span class="t-needs">고칠 것<b>${c.needs}</b></span><span>아직 안 봄<b>${c.todo}</b></span>${c.drop ? `<span class="t-drop">삭제<b>${c.drop}</b></span>` : ''}</div>` : '';
       const reqs = this.reqUnits();
       const needs = reqs.filter((x) => this.statusOf(x) === 'needs');
       const todo = reqs.filter((x) => this.statusOf(x) === 'todo');
+      const drops = reqs.filter((x) => this.statusOf(x) === 'drop');
       const row = (x) => {
         const first = freshOf(x, this.state.items)[0];
         const meta = first ? oneLine(first.c.text) : x.kind === 'remain' ? '이번엔 못 한 요청' : '';
         return `<button class="row" type="button" data-act="go" data-id="${esc(x.id)}">${this.dot(this.statusOf(x))}<span class="rt">${esc(x.title)}${meta ? `<span class="rm">${esc(meta)}</span>` : ''}</span></button>`;
       };
       const lists = (needs.length ? `<div class="sec"><h5>고칠 것 ${needs.length}</h5><div class="rows">${needs.map(row).join('')}</div></div>` : '')
-        + (todo.length ? `<div class="sec"><h5>아직 안 본 것 ${todo.length}</h5><div class="rows">${todo.map(row).join('')}</div></div>` : '');
+        + (todo.length ? `<div class="sec"><h5>아직 안 본 것 ${todo.length}</h5><div class="rows">${todo.map(row).join('')}</div></div>` : '')
+        + (drops.length ? `<div class="sec"><h5>삭제한 요청 ${drops.length}<span class="mu">고객 일지에 안 나가요</span></h5><div class="rows">${drops.map(row).join('')}</div></div>` : '');
       const off = s.offscreen.length ? `<div class="sec"><h5>화면 밖에서 볼 것</h5><ul>${s.offscreen.map((x) => `<li>${inline(x)}</li>`).join('')}</ul></div>` : '';
       const reg = s.regression.length ? `<details class="sec"><summary>AI가 따로 확인한 것 ${s.regression.length}</summary><ul>${s.regression.map((x) => `<li>${inline(x)}</li>`).join('')}</ul></details>` : '';
       const preview = u.kind === 'send' && !needs.length && !todo.length ? this.sendHtml() : '';
@@ -1593,21 +1686,25 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.ui.say.classList.toggle('live', Boolean(f.live));
       const back = f.noBack ? null : this.prevPlace();
       const btn = (x, cls) => (x ? `<button class="btn ${x[2]} ${cls}" type="button" data-act="${x[1]}">${esc(x[0])}</button>` : '');
-      this.ui.acts.innerHTML = `${f.noBack ? '' : `<button class="btn outline back" type="button" data-act="back" title="이전" aria-label="이전"${back ? '' : ' disabled'}>‹</button>`}${btn(f.a, 'a')}${btn(f.b, 'b')}`;
+      this.ui.acts.innerHTML = `${f.noBack ? '' : `<button class="btn outline back" type="button" data-act="back" title="이전" aria-label="이전"${back ? '' : ' disabled'}>‹</button>`}${btn(f.x, 'x')}${btn(f.a, 'a')}${btn(f.b, 'b')}`;
+      this.ui.acts.classList.toggle('wx', Boolean(f.x));
     }
 
     // 박스 아래 — 지금 할 일 한 줄과 누를 버튼(왼쪽은 '고칠 게 있어요' 쪽, 오른쪽이 앞으로 가는 쪽)
     // 3.0.3 — 확인이 여럿이어도 하나씩 넘기지 않는다. [검토 완료]를 누르면 그 요청은 끝(묶인 확인도 모두), 바로 다음 요청으로. 확인은 상자 안 번호로 골라 본다
     foot(u) {
-      if (this.composing) return { say: '어디가 어떻게 다른지 적고 [남기기]를 눌러요. 화면에서 위치를 찍어도 돼요', a: ['취소', 'compose-cancel', 'ghost'], b: ['남기기', 'comment', 'red'], noBack: true };
+      if (this.composing) return { say: `어디가 어떻게 다른지 적고 [남기기]를 눌러요. 화면에서 위치를 찍${this.spec.board ? '거나 파일을 붙여' : '어'}도 돼요`, a: ['취소', 'compose-cancel', 'ghost'], b: ['남기기', 'comment', 'red'], noBack: true };
       if (u.kind === 'send' || u.kind === 'end') return this.endFoot(u);
       const st = this.statusOf(u);
       const it = u.checks[this.state.chk];
       const nx = this.nextOpen(u);
       const last = nx.kind === 'send' || nx.kind === 'end';
       const onward = [last ? '마무리로 ›' : `다음 ${this.noun()} ›`, 'next-unit', 'dark'];
-      if (st === 'needs') return { say: '고칠 것으로 남겼어요. 다음으로 넘어가요', a: ['더 남기기', 'compose', 'outline'], b: onward };
-      if (st === 'done') return { say: '검토를 마친 요청이에요', a: ['검토 취소', 'undo', 'outline'], b: onward };
+      // 3.0.4 — [삭제]: 고객 요청·못 한 요청을 고객 일지에서 뺀다(고객 링크를 만들기 전까지, [되살리기]로 돌린다)
+      const x = this.canDrop(u) ? ['삭제', 'drop-unit', 'outline del'] : null;
+      if (st === 'drop') return { say: this.canDrop(u) ? '삭제한 요청이에요. 고객 일지에 안 나가요' : '삭제한 요청이에요', a: this.canDrop(u) ? ['되살리기', 'undrop', 'outline'] : null, b: onward };
+      if (st === 'needs') return { say: '고칠 것으로 남겼어요. 다음으로 넘어가요', a: ['더 남기기', 'compose', 'outline'], b: onward, x };
+      if (st === 'done') return { say: '검토를 마친 요청이에요', a: ['검토 취소', 'undo', 'outline'], b: onward, x };
       const fix = ['고칠 게 있어요', 'compose', 'outline'];
       const ok = ['검토 완료', 'ok-unit', 'ok'];
       let say;
@@ -1616,7 +1713,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       else if (it.url && !it.outside && !sameOrigin(it.url)) say = `이 확인은 ${placeName(it.url)} 화면에서 해요. 다 봤으면 [검토 완료]`;
       else if (it.outside) say = '[새 창에서 열기]로 확인하고 돌아와서 [검토 완료]';
       else say = `${(!it.url || onSite(it)) && it.steps.some((x) => x.marks.length) ? '빨간 표시대로' : '위 순서대로'} 해 보고 다 맞으면 [검토 완료]`;
-      return { say, a: fix, b: ok };
+      return { say, a: fix, b: ok, x };
     }
 
     endFoot(u) {
@@ -1969,6 +2066,16 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         this.okUnit();
       } else if (act === 'undo') {
         this.undo();
+      } else if (act === 'drop-unit') {
+        this.dropUnit();
+      } else if (act === 'undrop') {
+        this.undrop();
+      } else if (act === 'attach') {
+        const inp = this.ui.body.querySelector('input[data-role="file"]');
+        if (inp) inp.click();
+      } else if (act === 'unfile') {
+        this.draftFiles = this.draftFiles.filter((f) => f.id !== el.dataset.fid);
+        this.renderFiles();
       } else if (act === 'compose') {
         this.composing = true;
         this.focusDraft = true;
@@ -1977,6 +2084,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         this.composing = false;
         this.draft = '';
         this.draftPin = null;
+        this.draftFiles = [];
         this.render();
       } else if (act === 'comment') {
         this.comment();
@@ -2252,12 +2360,138 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.toast('검토를 취소했어요');
     }
 
+    // 3.0.4 — [삭제]: 고객 요청·못 한 요청을 고객 업데이트 일지에서 뺀다. 일지 원본은 그대로라 [되살리기]로 다시 넣는다. 고객 링크를 만든 뒤에는 못 한다
+    canDrop(u) {
+      return Boolean(u && this.spec.log && (u.kind === 'req' || u.kind === 'remain') && !(this.board && this.board.share_url));
+    }
+
+    dropUnit() {
+      const u = this.current();
+      if (!this.canDrop(u) || this.statusOf(u) === 'drop') return;
+      const e = this.entry(u.key);
+      Object.assign(e, { was: this.statusOf(u), status: 'drop', at: Date.now(), by: this.name() });
+      this.composing = false;
+      this.save();
+      const next = this.nextOpen(u);
+      this.toast(next.kind === 'send' || next.kind === 'end' ? '삭제했어요 · 고객 일지에서 빠져요' : `삭제했어요 · 고객 일지에서 빠져요. 다음 ${this.noun()}이에요`);
+      this.go(next.id, 0);
+    }
+
+    undrop() {
+      const u = this.current();
+      if (!this.canDrop(u) || this.statusOf(u) !== 'drop') return;
+      const e = this.entry(u.key);
+      const back = freshOf(u, this.state.items).length ? 'needs' : e.was === 'done' ? 'done' : 'todo';
+      Object.assign(e, { status: back, at: Date.now() });
+      delete e.was;
+      this.save();
+      this.render();
+      this.toast('되살렸어요. 고객 일지에 다시 나가요');
+    }
+
+    // 3.0.4 — [고칠 게 있어요]에 붙이는 파일. 고르는 즉시 대시보드에 올리고(검수판 열쇠로), [남기기] 때 말과 함께 남긴다
+    canAttach() {
+      const u = this.current();
+      return Boolean(this.spec && this.spec.board && !this.stale && u && u.kind !== 'end' && this.statusOf(u) !== 'drop');
+    }
+
+    attach(list) {
+      const files = Array.from(list || []).filter((f) => f && typeof f.size === 'number');
+      if (!files.length) return;
+      if (!this.canAttach()) {
+        this.toast(this.spec && !this.spec.board ? '대시보드에 연결된 검수만 파일을 붙일 수 있어요' : '여기에는 파일을 붙일 수 없어요');
+        return;
+      }
+      if (!this.composing) {
+        this.composing = true;
+        this.render();
+      }
+      const room = FILES_MAX - this.draftFiles.length;
+      if (room <= 0) {
+        this.toast(`파일은 한 번에 ${FILES_MAX}개까지 붙일 수 있어요`);
+        return;
+      }
+      if (files.length > room) this.toast(`파일은 한 번에 ${FILES_MAX}개까지예요. 앞의 ${room}개만 붙였어요`);
+      files.slice(0, room).forEach((file) => {
+        const f = { id: uid(), name: String(file.name || '파일'), size: file.size, status: 'up', pct: 0 };
+        this.draftFiles.push(f);
+        if (f.size > FILE_MAX) Object.assign(f, { status: 'err', err: '100MB가 넘어 올릴 수 없어요' });
+        else this.upload(file, f);
+      });
+      this.renderFiles();
+    }
+
+    upload(file, f) {
+      const b = this.spec.board;
+      const fd = new FormData();
+      fd.append('file', file, f.name);
+      const x = new XMLHttpRequest();
+      const finish = (patch) => {
+        Object.assign(f, patch);
+        this.renderFiles();
+      };
+      x.open('POST', `${b.api}/public/qa/${encodeURIComponent(b.key)}/files`);
+      x.setRequestHeader('Accept', 'application/json');
+      x.upload.onprogress = (e) => {
+        if (!e.lengthComputable || !e.total) return;
+        f.pct = Math.min(99, Math.round((e.loaded / e.total) * 100));
+        const el = this.ui.body.querySelector(`.fl[data-fid="${f.id}"] .fst`);
+        if (el) el.textContent = `올리는 중 ${f.pct}%`;
+      };
+      x.onload = () => {
+        const json = attempt(() => JSON.parse(x.responseText), null);
+        const d = json && json.data;
+        if (x.status >= 200 && x.status < 300 && d && /^https?:\/\//i.test(String(d.url || ''))) {
+          finish({ status: 'ok', path: String(d.path || ''), url: String(d.url), name: String(d.name || f.name), size: Number(d.size) || f.size, mime: String(d.mime || '') });
+          return;
+        }
+        finish({ status: 'err', err: (json && json.message) || (x.status === 413 ? '파일이 너무 커요' : `올리지 못했어요(${x.status})`) });
+      };
+      x.onerror = () => finish({ status: 'err', err: '올리지 못했어요. 인터넷 연결을 확인해 주세요' });
+      x.send(fd);
+    }
+
+    // 붙인 파일 목록만 다시 그린다(쓰던 글 자리가 흔들리지 않게)
+    renderFiles() {
+      const box = this.ui.body.querySelector('[data-role="files"]');
+      if (box) box.innerHTML = this.draftFiles.map((f) => this.draftChip(f)).join('');
+    }
+
+    draftChip(f) {
+      const st = f.status === 'up' ? `<span class="fst">올리는 중${f.pct ? ` ${f.pct}%` : ''}</span>`
+        : f.status === 'err' ? `<span class="fst bad">${esc(f.err || '올리지 못했어요')}</span>` : '';
+      return `<div class="fl${f.status === 'err' ? ' bad' : ''}" data-fid="${esc(f.id)}">${CLIP}<span class="fn">${esc(f.name)}</span><span class="fz">${esc(sizeText(f.size || 0))}</span>${st}`
+        + `<button type="button" data-act="unfile" data-fid="${esc(f.id)}" title="빼기" aria-label="빼기">×</button></div>`;
+    }
+
+    filesHtml(list) {
+      if (!list.length) return '';
+      return `<div class="fls">${list.map((f) => `<a class="fl" href="${esc(f.url)}" target="_blank" rel="noopener">${CLIP}<span class="fn">${esc(f.name || '파일')}</span>`
+        + `${f.size ? `<span class="fz">${esc(sizeText(f.size))}</span>` : ''}</a>`).join('')}</div>`;
+    }
+
+    // 끄는 동안만 점선 칸을 밝힌다(끌기를 멈추면 잠시 뒤 저절로 꺼진다)
+    dragOver() {
+      const dz = this.ui.body.querySelector('.dz');
+      if (dz) dz.classList.add('over');
+      clearTimeout(this.dragTimer);
+      this.dragTimer = setTimeout(() => {
+        const z = this.ui.body.querySelector('.dz');
+        if (z) z.classList.remove('over');
+      }, 180);
+    }
+
     comment() {
       const u = this.current();
       if (!u) return;
       const ta = this.ui.body.querySelector('textarea[data-role="draft"]');
       const text = String(ta ? ta.value : this.draft).trim();
-      if (!text) {
+      if (this.draftFiles.some((f) => f.status === 'up')) {
+        this.toast('파일을 올리는 중이에요. 다 올라가면 [남기기]를 눌러 주세요');
+        return;
+      }
+      const files = this.draftFiles.filter((f) => f.status === 'ok').map((f) => ({ name: f.name, url: f.url, path: f.path, size: f.size, mime: f.mime || '' }));
+      if (!text && !files.length) {
         this.toast('고칠 점을 적어 주세요');
         if (ta) ta.focus();
         return;
@@ -2267,18 +2501,21 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
         const e = this.entry(u.key);
         const it = this.check();
         const c = { id: uid(), by: this.name() || '검수자', at: Date.now(), round: this.spec.round, text, pin: this.draftPin || null };
+        if (files.length) c.files = files;
         if (it && u.kind !== 'check') c.check = it.id;
         e.comments = (e.comments || []).concat([c]);
         e.status = 'needs';
         e.at = Date.now();
+        const failed = this.draftFiles.filter((f) => f.status === 'err').length;
         this.draft = '';
         this.draftPin = null;
+        this.draftFiles = [];
         this.composing = false;
         this.targetsFor = '';
         this.save();
         this.render();
         this.tick();
-        this.toast('고칠 것으로 남겼어요');
+        this.toast(failed ? `고칠 것으로 남겼어요 · 못 올린 파일 ${failed}개는 빠졌어요` : '고칠 것으로 남겼어요');
       });
     }
 
@@ -2600,7 +2837,7 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       if (JSON.stringify(this.state.items) === this.pushedSig) return;
       const c = this.counts();
       clearTimeout(this.pushTimer);
-      this.pushTimer = setTimeout(() => this.pushNow(), delay != null ? delay : c.all && c.done === c.all ? 150 : 1200);
+      this.pushTimer = setTimeout(() => this.pushNow(), delay != null ? delay : c.all && c.done + c.drop === c.all ? 150 : 1200);
     }
 
     async pushNow() {
@@ -2610,9 +2847,14 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       if (sig === this.pushedSig) return null;
       const c = this.counts();
       this.pushedSig = sig;
-      const body = { state: { items: this.state.items }, round: this.spec.round, counts: { total: c.all, done: c.done, needs: c.needs } };
+      // 3.0.4 — 지운 요청은 검토할 것에서 뺀다(남은 것을 다 끝내면 끝)
+      const body = { state: { items: this.state.items }, round: this.spec.round, counts: { total: c.all - c.drop, done: c.done, needs: c.needs } };
       // 못 한 요청마다 고객에게 나갈 말(고쳐 쓴 말) — 대시보드가 고객 일지 '남은 부분'을 이 말로 바꾼다(고객 링크를 열기 전까지)
-      if (this.spec.log) body.remain = remainOut(this.spec, this.state.items);
+      if (this.spec.log) {
+        body.remain = remainOut(this.spec, this.state.items);
+        // [삭제]한 고객 요청 — 대시보드가 고객 일지에서 뺀다(고객 링크를 열기 전까지)
+        body.hide = hideOut(this.spec, this.state.items);
+      }
       const res = await this.call('PUT', '/state', body);
       if (res.ok) {
         this.setBoard(res.data);
@@ -2695,7 +2937,12 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       this.toast('대시보드에 등록하는 중이에요…');
       if (this.synced) await this.pushNow();
       const c = this.counts();
-      const res = await this.call('POST', '/handoff', { text: buildExport(this.spec, this.state, this.name()), name: this.name(), round: this.spec.round, needs: c.needs });
+      // 3.0.4 — 고칠 점에 붙인 파일(대시보드에 올라간 것) — 이슈 댓글에 사진·링크로 붙는다. 지운 요청에 남긴 것은 뺀다
+      const files = [];
+      this.spec.units.filter((u) => this.statusOf(u) !== 'drop').forEach((u) => freshOf(u, this.state.items).forEach((x) => filesOf(x.c).forEach((f) => {
+        if (f.path && !files.includes(String(f.path))) files.push(String(f.path));
+      })));
+      const res = await this.call('POST', '/handoff', { text: buildExport(this.spec, this.state, this.name()), name: this.name(), round: this.spec.round, needs: c.needs, files: files.slice(0, 60) });
       this.sending = false;
       if (res.ok && res.data) {
         this.polledAt = Date.now();
@@ -2751,7 +2998,9 @@ a.ln.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-
       // 남은 부분 — 고객 링크를 만들기 전엔 검수판에서 고쳐 쓴 말(만들 때 그 말이 그대로 나간다), 만든 뒤엔 고객이 보는 그대로
       const rest = !log ? [] : b.share_url || !this.spec.log ? log.remain.map((r) => r.say.trim()).filter(Boolean) : remainOut(this.spec, this.state.items);
       const remain = rest.length ? `<div class="le rest"><b>남은 부분</b>${list(rest)}</div>` : '';
-      const entries = log ? log.entries.map((e) => `<div class="le"><b>${esc(e.title)}</b>${list(e.lines)}${e.links.map((l) => `<a class="ln" href="${esc(l.url)}" data-href="${esc(l.url)}">${esc(l.label)} ›</a>`).join(' ')}</div>`).join('') : '';
+      // 3.0.4 — [삭제]한 요청은 빼고 보인다(고객 링크를 만든 뒤엔 대시보드가 뺀 그대로)
+      const hidden = b.share_url || !this.spec.log ? toList(b.log && b.log.hide).map((x) => String(x).trim()) : hideOut(this.spec, this.state.items);
+      const entries = log ? log.entries.filter((e) => !hidden.includes(e.title)).map((e) => `<div class="le"><b>${esc(e.title)}</b>${list(e.lines)}${e.links.map((l) => `<a class="ln" href="${esc(l.url)}" data-href="${esc(l.url)}">${esc(l.label)} ›</a>`).join(' ')}</div>`).join('') : '';
       const share = b.share_url ? `<div class="share">고객 링크가 만들어졌어요<span class="mu">${esc(this.seenText())}</span></div>` : '';
       return `${share}<div class="sec"><h5>고객에게 이렇게 나가요</h5>${msg ? `<div class="msgp">${esc(msg)}</div>` : ''}`
         + `${log ? `<div class="lgp"><div class="lh">${esc(head || '업데이트 일지')}</div>${remain}${entries}</div>` : ''}</div>`;
