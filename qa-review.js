@@ -1,14 +1,14 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.0.4';
+  const VERSION = '3.1.0';
   const SCRIPT_URL = 'https://honest-family.github.io/qa-review-kit/qa-review.js';
   const me = document.currentScript;
   const boot = (me && me.dataset && me.dataset.boot) || '';
 
   if (window.qaReview && window.qaReview.version) {
     if (boot === 'resume' && window.qaReview.resume) {
-      if (/[#?&]qa(-review)?=/.test(`${location.hash}&${location.search}`) && window.qaReview.fromHash) window.qaReview.fromHash();
+      if (/[#?&](qa(-review)?|develop)=/.test(`${location.hash}&${location.search}`) && window.qaReview.fromHash) window.qaReview.fromHash();
       else window.qaReview.resume();
     }
     return;
@@ -50,6 +50,10 @@
   // 지운 요청은 [되살리기]로 다시 넣는다. 고객 링크를 만든 뒤에는 고객이 본 글이라 지우지 않는다. 대시보드에는 남은 것만 검토할 것으로 센다.
   // [고칠 게 있어요]에 파일을 붙인다(대표: "파일들 드래그앤드랍으로 첨부할 수 있게 해줘 (첨부하기 영역 점선으로 그려줘)") — 점선 칸에 끌어다 놓거나 눌러서 고르고,
   // 화면 캡처는 붙여 넣어도 된다. 고르는 즉시 대시보드에 올리고(검수판이 대시보드에 연결된 것만), [AI에게 보내기] 때 이슈 댓글에 사진·링크로 붙는다.
+  // 3.1.0 (2026-11-16) — 주소 뒤 ?develop=on 으로 들어온다(대표: "내부 검수 전문가 그거는 ?develop=on으로 들어가게"). 그 사이트의 최신 검수를 대시보드에서 받아 연다.
+  // 검수 링크(해독 키)는 회사 IP에서만 내려오고, 다른 곳에서는 이 브라우저에 열어 둔 검수가 있을 때만 이어서 연다. 끄기는 ?develop=off (예전 #qa=on·off·검수 링크도 그대로).
+  // [AI에게 보내기]는 회사 IP가 아니면 서버가 거절하고 "허용되지 않은 ip입니다. 회사 ip로 전환 후 재시도해주세요."를 띄운다(주소 규칙을 알아낸 사람이 일을 시키지 못하게).
+  const DEVELOP_PARAM = 'develop';
   const STATUS = { todo: '검토 전', needs: '고칠 것', done: '검토 완료', drop: '삭제' };
   const FILE_MAX = 100 * 1024 * 1024;
   const FILES_MAX = 10;
@@ -2958,6 +2962,11 @@ a.fl:hover{background:#e5e7eb}
         this.toast(res.message || '새 회차가 나왔어요');
         return;
       }
+      if (res.status === 403 && res.message) {
+        // 3.1.0 — 회사 IP가 아니면 AI에게 일을 시킬 수 없다. 서버가 준 말 그대로 보여 준다
+        this.modal(`<h3>${esc(res.message)}</h3><div class="mr"><button class="btn red sm" type="button" data-act="modal-cancel">확인</button></div>`);
+        return;
+      }
       this.exportModal(res.message ? `자동으로 넘기지 못했어요(${res.message}).` : '자동으로 넘기지 못했어요(인터넷 연결을 확인해 주세요).');
     }
 
@@ -3113,6 +3122,8 @@ a.fl:hover{background:#e5e7eb}
       const hit = pieces.find((p) => p === key || p.indexOf(`${key}=`) === 0);
       return hit == null ? null : attempt(() => decodeURIComponent(hit.slice(key.length + 1)), '');
     };
+    const dev = find(DEVELOP_PARAM);
+    if (dev != null && find(PARAM) == null) return { value: dev.trim() === 'off' ? 'off' : '', develop: dev.trim() !== 'off', item: '', st: '', step: '' };
     const value = find(PARAM);
     if (value != null) return { value: value.trim(), item: find(ITEM_PARAM) || '', st: find(STATE_PARAM) || '', step: find(STEP_PARAM) || '' };
     const legacy = find(HASH.slice(0, -1));
@@ -3120,12 +3131,47 @@ a.fl:hover{background:#e5e7eb}
   };
 
   const dropParam = () => attempt(() => {
-    const strip = (raw) => raw.split('&').filter((p) => p && !/^(qa|qa-item|qa-st|qa-step|qa-review)(=|$)/.test(p)).join('&');
+    const strip = (raw) => raw.split('&').filter((p) => p && !/^(qa|qa-item|qa-st|qa-step|qa-review|develop)(=|$)/.test(p)).join('&');
     const hash = strip(String(location.hash || '').replace(/^#/, ''));
     const search = strip(String(location.search || '').replace(/^\?/, ''));
     const next = `${location.origin}${location.pathname}${search ? `?${search}` : ''}${hash ? `#${hash}` : ''}`;
     if (next !== location.href) history.replaceState(history.state, '', next);
   }, null);
+
+  // 3.1.0 — ?develop=on: 이 사이트의 최신 검수 링크를 대시보드에서 받아 연다(회사 IP에서만 내려온다).
+  // 못 받으면 이 브라우저에 열어 둔 검수를 이어서 열고, 그것도 없으면 까닭을 알려 준다.
+  const enter = async () => {
+    let res = null;
+    let json = null;
+    try {
+      res = await fetch(`${DEFAULT_API}/public/qa-enter?site=${encodeURIComponent(location.origin)}`, { cache: 'no-store', headers: { Accept: 'application/json' } });
+      json = await res.json().catch(() => null);
+    } catch (e) {
+      res = null;
+    }
+    const link = res && res.ok && json && json.data && String(json.data.link || '');
+    const hit = link ? link.match(/[#&?]qa=([^&#]+)/) : null;
+    if (hit) {
+      try {
+        const raw = decodeURIComponent(hit[1]).trim();
+        const payload = /^[0-2]\./.test(raw) ? raw : `2.${raw}`;
+        const spec = await decodeSpec(payload);
+        api.open(spec, { url: location.href.split('#')[0], src: payload });
+        return true;
+      } catch (e) {
+        // 아래에서 열어 둔 검수로 이어 간다
+      }
+    }
+    const id = local.text(ON) || local.text(LAST);
+    if (id && local.get(KEY + id)) {
+      api.resume();
+      return true;
+    }
+    if (res && res.status === 403 && json && json.message) flash(json.message);
+    else if (res && res.status === 404) flash('이 주소에 등록된 검수가 없어요');
+    else flash('검수를 불러오지 못했어요. 잠시 뒤 다시 열어 주세요');
+    return false;
+  };
 
   const start = async () => {
     if (boot === 'manual') return false;
@@ -3136,7 +3182,11 @@ a.fl:hover{background:#e5e7eb}
         local.put(ON, null);
         session.put(ON, null);
         if (app) app.destroy({ keep: true });
-        flash('검수 화면을 껐어요. 다시 보려면 주소 끝에 #qa=on 을 붙여 주세요');
+        flash('검수 화면을 껐어요. 다시 보려면 주소 뒤에 ?develop=on 을 붙여 주세요');
+        return true;
+      }
+      if (param.develop) {
+        await enter();
         return true;
       }
       if (!param.value || param.value === 'on') {
