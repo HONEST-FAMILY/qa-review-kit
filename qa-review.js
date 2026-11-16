@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION = '3.1.0';
+  const VERSION = '3.1.1';
   const SCRIPT_URL = 'https://honest-family.github.io/qa-review-kit/qa-review.js';
   const me = document.currentScript;
   const boot = (me && me.dataset && me.dataset.boot) || '';
@@ -745,8 +745,8 @@ svg{display:block}
 @keyframes qp{50%{opacity:.25}}
 .lnk{flex:none;color:#2563eb;font-weight:800}
 .lnk:hover{text-decoration:underline}
-.prog{flex:none;display:flex;gap:3px;padding:9px 12px 1px}
-.seg{flex:1;min-width:5px;height:14px;display:flex;align-items:center}
+.prog{flex:none;position:relative;display:grid;grid-template-columns:repeat(auto-fit,minmax(20px,1fr));grid-auto-rows:18px;column-gap:3px;padding:7px 12px 0;max-height:124px;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.seg{min-width:0;height:18px;display:flex;align-items:center}
 .seg i{display:block;width:100%;height:5px;border-radius:3px;background:#e5e7eb}
 .seg:hover i{background:#cbd2dc}
 .seg.done i{background:#16a34a}
@@ -1569,6 +1569,17 @@ a.fl:hover{background:#e5e7eb}
         const name = x.kind === 'send' ? '마지막 · 고객에게 보낼 글' : x.kind === 'end' ? '마무리' : `${i + 1}. ${x.title}`;
         return `<button class="seg ${st}${x === u ? ' cur' : ''}" type="button" data-act="go" data-id="${esc(x.id)}" title="${esc(`${name} · ${STATUS[st]}`)}" aria-label="${esc(name)}"><i></i></button>`;
       }).join('');
+      this.showProgCur();
+    }
+
+    showProgCur() {
+      const nav = this.ui.prog;
+      const cur = nav.querySelector('.seg.cur');
+      if (!cur || nav.scrollHeight <= nav.clientHeight) return;
+      const top = cur.offsetTop;
+      const bottom = top + cur.offsetHeight;
+      if (top < nav.scrollTop) nav.scrollTop = top;
+      else if (bottom > nav.scrollTop + nav.clientHeight) nav.scrollTop = bottom - nav.clientHeight;
     }
 
     bodyHtml(u) {
@@ -2038,6 +2049,7 @@ a.fl:hover{background:#e5e7eb}
       if (act === 'fold') {
         this.state.fold = !this.state.fold;
         this.applyView();
+        this.showProgCur();
         this.save();
         this.schedule();
       } else if (act === 'mobile' || act === 'split') {
